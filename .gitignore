@@ -1,0 +1,4 @@
+*.pyc
+Datasets_SCOT
+logs
+wandb

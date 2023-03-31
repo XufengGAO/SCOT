@@ -45,6 +45,7 @@ def run(datapath, benchmark, backbone, thres, alpha, hyperpixel,
         model.hyperpixel_ids = util.parse_hyperpixel(hyperpixel)
 
     # 4. Evaluator initialization
+    # calculate PCK., etc
     evaluator = evaluation.Evaluator(benchmark, device)
 
     zero_pcks = 0
@@ -56,14 +57,18 @@ def run(datapath, benchmark, backbone, thres, alpha, hyperpixel,
         threshold = 0.0
         
         # a) Retrieve images and adjust their sizes to avoid large numbers of hyperpixels
+        # 1xCxHxW, 1x2xnum_kp -> 1xCxnew_Hxnew_W, 1x2xnum_kp with resized kps
+        # scale max length to 300
+        # TODO, should be modified later, the size issue
         data['src_img'], data['src_kps'], data['src_intratio'] = util.resize(data['src_img'], data['src_kps'][0])
         data['trg_img'], data['trg_kps'], data['trg_intratio'] = util.resize(data['trg_img'], data['trg_kps'][0])
         src_size = data['src_img'].size()
         trg_size = data['trg_img'].size()
         
-        if len(args.cam)>0:
+        if len(args.cam)>0: # not for beamsearch, only for with resnet101-FCN
             data['src_mask'] = util.resize_mask(data['src_mask'],src_size)
             data['trg_mask'] = util.resize_mask(data['trg_mask'],trg_size)
+            # just find the box for mask
             data['src_bbox'] = util.get_bbox_mask(data['src_mask'], thres=threshold).to(device)
             data['trg_bbox'] = util.get_bbox_mask(data['trg_mask'], thres=threshold).to(device)
         else:
@@ -75,18 +80,22 @@ def run(datapath, benchmark, backbone, thres, alpha, hyperpixel,
 
         # b) Feed a pair of images to Hyperpixel Flow model
         with torch.no_grad():
-            confidence_ts, src_box, trg_box = model(data['src_img'], data['trg_img'], args.sim, args.exp1, args.exp2, args.eps, args.classmap, data['src_bbox'], data['trg_bbox'], data['src_mask'], data['trg_mask'], backbone)
-            conf, trg_indices = torch.max(confidence_ts, dim=1)
+            # return confidence matrix (3750, 3750), receptive field points (3750, 4)
+            confidence_ts, src_box, trg_box = model(data['src_img'], data['trg_img'], args.sim, 
+                                                    args.exp1, args.exp2, args.eps, args.classmap, 
+                                                    data['src_bbox'], data['trg_bbox'], data['src_mask'], 
+                                                    data['trg_mask'], backbone)
+            conf, trg_indices = torch.max(confidence_ts, dim=1) # torch.Size([3750])
             unique, inv = torch.unique(trg_indices, sorted=False, return_inverse=True)
-            trgpt_list.append(len(unique))
-            srcpt_list.append(len(confidence_ts))
+            trgpt_list.append(len(unique)) # num of matched target points
+            srcpt_list.append(len(confidence_ts)) # num of source points
 
         # c) Predict key-points & evaluate performance
         prd_kps = geometry.predict_kps(src_box, trg_box, data['src_kps'], confidence_ts)
         toc = time.time()
         #print(toc-tic)
         time_list.append(toc-tic)
-        pair_pck = evaluator.evaluate(prd_kps, data)
+        pair_pck = evaluator.evaluate(prd_kps, data) # percent of correct match
         PCK_list.append(pair_pck)
         if pair_pck==0:
             zero_pcks += 1
@@ -97,7 +106,7 @@ def run(datapath, benchmark, backbone, thres, alpha, hyperpixel,
     
     #save_file = logfile.replace('logs/','')
     #np.save('PCK_{}.npy'.format(save_file), PCK_list)
-    if beamsearch:
+    if beamsearch: # average pck score
         return (sum(evaluator.eval_buf['pck']) / len(evaluator.eval_buf['pck'])) * 100.
     else:
         logging.info('source points:'+str(sum(srcpt_list)*1.0/len(srcpt_list)))

@@ -1,0 +1,62 @@
+program: train.py
+method: grid
+metric:
+  name: val_pck_votes_geo
+  goal: maximize
+parameters:
+  benchmark:
+    value: 'pfpascal'
+  backbone:
+    value: 'resnet101'
+  use_pretrained:
+    value: True
+  pretrained_path: 
+    value: "/scratch/students/2023-spring-sp-xugao/SCOT/logs/_0330_151508.log/best_model.pt"
+  # run_id:
+  #   value: "5h6kghje"
+  start_epoch:
+    value: 18
+  weight_thres:
+    value: 0.1
+  lr:
+    values: [0.0005, 0.0001]
+  epochs:
+    value: 28
+  batch_size:
+    value: 6
+  optimizer:
+    value: 'sgd'
+  # 0.001, 0.0001, 0.00001, 0.000001, 0.01 
+  # weight_decay:
+  #   values: [0.005, 0.00001, 0.0001, 0.001, 0.01,0]
+  # weight_decay:
+  #   value: 0.00001
+  exp1:
+    value: 1.0
+  exp2:
+    value: 0.5
+  classmap:
+    value: 1
+  use_wandb:
+    value: True
+  use_xavier:
+    value: False
+  use_scheduler:
+    value: False
+  use_grad_clip:
+    value: False
+  loss_stage:
+    values: ["votes"]
+  supervision:
+    values: ["flow"]
+    # , "votes", "votes_geo" "sim", "votes"， 
+
+
+
+
+
+
+
+
+
+

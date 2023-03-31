@@ -5,7 +5,18 @@ import re
 
 import torch.nn.functional as F
 import torch
+import random
+import numpy as np
 
+def fix_randseed(seed):
+    r"""Fixes random seed for reproducibility"""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
 
 def init_logger(logfile):
     r"""Initialize logging settings"""
@@ -70,7 +81,7 @@ def resize(img, kps, side_thres=300):
     inter_ratio = 1.0
     #if side_max > side_thres:
     if True:
-        inter_ratio = side_thres / side_max
+        inter_ratio = side_thres / side_max # size reduced to 300
         img = F.interpolate(img,
                             size=(int(imsize[2] * inter_ratio), int(imsize[3] * inter_ratio)),
                             mode='bilinear',
@@ -83,6 +94,7 @@ def resize_mask(mask, imsize):
     mask = mask.unsqueeze(0).float()
     mask = F.interpolate(mask, size=(imsize[1],imsize[2]),
                         mode='bilinear', align_corners=False)
+    print("mask", mask.size())
     return mask[0][0]
 
 
@@ -101,3 +113,7 @@ def resize_TSS(img, side_thres=300):
         return img.squeeze(0), imsize[1:], img.size()[1:], inter_ratio
 
 
+def boolean_string(s):
+    if s not in {"False", "True"}:
+        raise ValueError("Not a valid boolean string")
+    return s == "True"

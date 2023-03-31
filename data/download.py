@@ -10,7 +10,7 @@ from . import pfwillow
 from . import spair
 
 
-def load_dataset(benchmark, datapath, thres, device, split='test', cam=''):
+def load_dataset(benchmark, datapath, thres, device, split='test', cam='', img_side=(256, 256)):
     r"""Instantiate desired correspondence dataset"""
     correspondence_benchmark = {
         'pfpascal': pfpascal.PFPascalDataset,
@@ -22,7 +22,7 @@ def load_dataset(benchmark, datapath, thres, device, split='test', cam=''):
     if dataset is None:
         raise Exception('Invalid benchmark dataset %s.' % benchmark)
 
-    return dataset(benchmark, datapath, thres, device, split, cam)
+    return dataset(benchmark, datapath, thres, device, split, cam, img_side)
 
 
 def download_from_google(token_id, filename):
@@ -33,7 +33,7 @@ def download_from_google(token_id, filename):
     destination = filename + '.tar.gz'
     session = requests.Session()
 
-    response = session.get(url, params={'id': token_id}, stream=True)
+    response = session.get(url, params={'id': token_id, 'confirm':'t'}, stream=True)
     token = get_confirm_token(response)
 
     if token:

@@ -46,7 +46,9 @@ class Evaluator:
     def eval_pck(self, prd_kps, data):
         r"""Compute percentage of correct key-points (PCK) based on prediction"""
         pckthres = data['pckthres'][0] * data['trg_intratio']
-        ncorrt = correct_kps(data['trg_kps'].cuda(), prd_kps, pckthres, data['alpha'])
+        # ncorrt = correct_kps(data['trg_kps'].cuda(), prd_kps, pckthres, data['alpha'])
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        ncorrt = correct_kps(data['trg_kps'].to(device), prd_kps, pckthres, data['alpha'])
         pair_pck = int(ncorrt) / int(data['trg_kps'].size(1))
 
         self.eval_buf['pck'].append(pair_pck)

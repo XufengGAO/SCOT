@@ -7,27 +7,31 @@ from . import util
 
 def center(box):
     r"""Calculates centers, (x, y), of box (N, 4)"""
-    x_center = box[:, 0] + (box[:, 2] - box[:, 0]) // 2
-    y_center = box[:, 1] + (box[:, 3] - box[:, 1]) // 2
+    x_center = box[:, 0] + torch.div((box[:, 2] - box[:, 0]), 2, rounding_mode='trunc')
+    y_center = box[:, 1] + torch.div((box[:, 3] - box[:, 1]), 2, rounding_mode='trunc')
+    # print("x_center", x_center.size())
     return torch.stack((x_center, y_center)).t().to(box.device)
 
 
 def receptive_fields(rfsz, jsz, feat_size):
     r"""Returns a set of receptive fields (N, 4)"""
-    width = feat_size[2]
-    height = feat_size[1]
 
-    feat_ids = torch.tensor(list(range(width))).repeat(1, height).t().repeat(1, 2)
+    width = feat_size[3]
+    height = feat_size[2]
+
+    # print(width, height)
+
+    feat_ids = torch.tensor(list(range(width))).repeat(1, height).t().repeat(1, 2).to(jsz.device)
     feat_ids[:, 0] = torch.tensor(list(range(height))).unsqueeze(1).repeat(1, width).view(-1)
 
-    box = torch.zeros(feat_ids.size()[0], 4)
-    box[:, 0] = feat_ids[:, 1] * jsz - rfsz // 2
-    box[:, 1] = feat_ids[:, 0] * jsz - rfsz // 2
-    box[:, 2] = feat_ids[:, 1] * jsz + rfsz // 2
-    box[:, 3] = feat_ids[:, 0] * jsz + rfsz // 2
+    box = torch.zeros(feat_ids.size()[0], 4).to(jsz.device)
+    # print(box.device, feat_ids.device, jsz.device)
+    box[:, 0] = feat_ids[:, 1] * jsz - torch.div(rfsz, 2, rounding_mode='trunc')
+    box[:, 1] = feat_ids[:, 0] * jsz - torch.div(rfsz, 2, rounding_mode='trunc')
+    box[:, 2] = feat_ids[:, 1] * jsz + torch.div(rfsz, 2, rounding_mode='trunc')
+    box[:, 3] = feat_ids[:, 0] * jsz + torch.div(rfsz, 2, rounding_mode='trunc')
 
     return box
-
 
 def prune_margin(receptive_box, imsize, threshold=0):
     r"""Remove receptive fields on the margin of the image"""
@@ -63,31 +67,59 @@ def prune_bbox(receptive_box, bbox, threshold=0):
 
     return pruned_receptive_box, valid_ids
 
+def mutual_nn_filter(correlation_matrix):
+    r"""Mutual nearest neighbor filtering (Rocco et al. NeurIPS'18)"""
+    corr_src_max = torch.max(correlation_matrix, dim=2, keepdim=True)[0]
+    corr_trg_max = torch.max(correlation_matrix, dim=1, keepdim=True)[0]
+    corr_src_max[corr_src_max == 0] = corr_src_max[corr_src_max == 0] + 1e-30
+    corr_trg_max[corr_trg_max == 0] = corr_trg_max[corr_trg_max == 0] + 1e-30
 
-def predict_kps(src_box, trg_box, src_kps, confidence_ts):
+    corr_src = correlation_matrix / (corr_src_max + 1e-30)
+    corr_trg = correlation_matrix / (corr_trg_max + 1e-30)
+
+    return correlation_matrix * (corr_src * corr_trg)
+
+def predict_kps(src_box, trg_box, src_kps, n_pts, confidence_ts):
     r"""Transfer keypoints by nearest-neighbour assignment"""
 
-    # 1. Prepare geometries & argmax target indices
-    _, trg_argmax_idx = torch.max(confidence_ts, dim=1)
-    src_geomet = src_box[:, :2].unsqueeze(0).repeat(len(src_kps.t()), 1, 1)
-    trg_geomet = trg_box[:, :2].unsqueeze(0).repeat(len(src_kps.t()), 1, 1)
+    # TODO: """Mutual nearest neighbor filtering (Rocco et al. NeurIPS'18)"""
+    # confidence_ts = mutual_nn_filter(confidence_ts) # refined correleation matrix
 
-    # 2. Retrieve neighbouring source boxes that cover source key-points
-    src_nbr_onehot, n_neighbours = neighbours(src_box, src_kps)
+    prd_kps = []
+    max_pts = 400
+    # print(src_box.size())
+    for ct, kpss, np in zip(confidence_ts, src_kps, n_pts):
 
-    # 3. Get displacements from source neighbouring box centers to each key-point
-    src_displacements = src_kps.t().unsqueeze(1).repeat(1, len(src_box), 1) - src_geomet
-    src_displacements = src_displacements * src_nbr_onehot.unsqueeze(2).repeat(1, 1, 2).float()
+        # print(ct.size(), kpss.size(), np)
+        
+        # 1. Prepare geometries & argmax target indices
+        kp = kpss.narrow_copy(1, 0, np) # cut the real kpss
+        _, trg_argmax_idx = torch.max(ct, dim=1)
+        src_geomet = src_box[:, :2].unsqueeze(0).repeat(len(kp.t()), 1, 1)
+        trg_geomet = trg_box[:, :2].unsqueeze(0).repeat(len(kp.t()), 1, 1)
 
-    # 4. Transfer the neighbours based on given confidence tensor
-    vector_summator = torch.zeros_like(src_geomet)
-    src_idx = src_nbr_onehot.nonzero()
-    trg_idx = trg_argmax_idx.index_select(dim=0, index=src_idx[:, 1])
-    vector_summator[src_idx[:, 0], src_idx[:, 1]] = trg_geomet[src_idx[:, 0], trg_idx]
-    vector_summator += src_displacements
-    pred = (vector_summator.sum(dim=1) / n_neighbours.unsqueeze(1).repeat(1, 2).float())
+        # 2. Retrieve neighbouring source boxes that cover source key-points
+        src_nbr_onehot, n_neighbours = neighbours(src_box, kp)
 
-    return pred.t()
+        # 3. Get displacements from source neighbouring box centers to each key-point
+        src_displacements = kp.t().unsqueeze(1).repeat(1, len(src_box), 1) - src_geomet
+        src_displacements = src_displacements * src_nbr_onehot.unsqueeze(2).repeat(1, 1, 2).float()
+
+        # 4. Transfer the neighbours based on given confidence tensor
+        vector_summator = torch.zeros_like(src_geomet)
+        src_idx = src_nbr_onehot.nonzero()
+        
+        trg_idx = trg_argmax_idx.index_select(dim=0, index=src_idx[:, 1])
+        vector_summator[src_idx[:, 0], src_idx[:, 1]] = trg_geomet[src_idx[:, 0], trg_idx]
+        vector_summator = vector_summator + src_displacements
+        prd = (vector_summator.sum(dim=1) / n_neighbours.unsqueeze(1).repeat(1, 2).float()).t()
+
+        # 5. Concatenate pad-points for batch
+        pads = (torch.zeros((2, max_pts - np)).to(prd.device) - 1)
+        prd = torch.cat([prd, pads], dim=1)
+        prd_kps.append(prd)
+
+    return torch.stack(prd_kps)
 
 
 def neighbours(box, kps):
