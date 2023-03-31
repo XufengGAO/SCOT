@@ -54,7 +54,7 @@ class SCOT_CAM(nn.Module):
                                      16, 16, 16, 16, 32, 32, 32]).to(device)
             self.rfsz = torch.tensor([11, 19, 27, 35, 43, 59, 75, 91, 107, 139,\
                                     171, 203, 235, 267, 299, 331, 363, 395, 427, 459, 491, 523, 555, 587,\
-                                      619, 651, 683, 715, 747, 779, 811, 843, 907, 971])
+                                      619, 651, 683, 715, 747, 779, 811, 843, 907, 971]).to(device)
         elif backbone in ['resnet50_ft', 'resnet101_ft']:
             self.jsz = torch.tensor([4, 4, 4, 4, 8, 8, 8, 8, 8, 8]).to(device)
             self.rfsz = torch.tensor([11, 19, 27, 35, 43, 59, 75, 91, 107, 139]).to(device)
