@@ -291,6 +291,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_pretrained", type= utils.boolean_string, nargs="?", const=True, default=False)
     parser.add_argument('--pretrained_path', type=str, default='')
     parser.add_argument('--weight_thres', type=float, default=0.05,help='weight_thres (default: 0.05)')
+    parser.add_argument('--select_all', type=float, default=0.85,help='selec all probability (default: 0.85)')
 
     # Algorithm parameters
     parser.add_argument('--sim', type=str, default='OTGeo', help='Similarity type: OT, OTGeo, cos, cosGeo')
@@ -331,7 +332,8 @@ if __name__ == "__main__":
         args.cam,
         args.use_xavier,
         img_side=img_side,
-        weight_thres=args.weight_thres
+        weight_thres=args.weight_thres,
+        select_all=args.select_all
     )
 
     if args.use_pretrained:
