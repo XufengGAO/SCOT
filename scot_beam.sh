@@ -5,7 +5,7 @@ set -x
 benchmark="pfpascal"
 backbone="resnet101"
 
-python train.py \
+python -m torch.utils.bottleneck train.py \
     --benchmark $benchmark \
     --backbone $backbone \
     --weight_thres 0.10 \
@@ -13,7 +13,7 @@ python train.py \
     --supervision 'flow'\
     --lr 0.0001 \
     --momentum 0.9 \
-    --epochs 80 \
+    --epochs 1 \
     --batch_size 6 \
     --optimizer 'sgd' \
     --exp1 1.0 \

@@ -21,6 +21,8 @@ import wandb
 from model.base.geometry import Geometry
 
 # wandb.login()
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 def find_knn(db_vectors, qr_vectors):
     r"""Finds K-nearest neighbors (Euclidean distance)"""
     # print("knn", db_vectors.unsqueeze(1).size(), qr_vectors.size())
@@ -65,10 +67,14 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
 
     for step, batch in enumerate(dataloader):
         iters = step + epoch * total_steps
+        
         src_img, trg_img = strategy.get_image_pair(batch) 
+        src_img = src_img.to(device)
+        trg_img = trg_img.to(device)
+        
         if "src_mask" in batch.keys():
-            src_mask = batch["src_mask"]
-            trg_mask = batch["trg_mask"]
+            src_mask = batch["src_mask"].to(device)
+            trg_mask = batch["trg_mask"].to(device)
         else:
             src_mask = None
             trg_mask = None
@@ -94,6 +100,12 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
         model_outputs = [sim, votes, votes_geo]
         with torch.no_grad():
 
+            batch['src_kps'] = batch['src_kps'].to(device)
+            batch['n_pts'] = batch['n_pts'].to(device)
+            batch['trg_kps'] = batch['trg_kps'].to(device)
+            batch['n_pts'] = batch['n_pts'].to(device)
+            batch['pckthres'] = batch['pckthres'].to(device)
+            
             batch['src_kpidx'] = match_idx(batch['src_kps'], batch['n_pts'])
             batch['trg_kpidx'] = match_idx(batch['trg_kps'], batch['n_pts'])
 
@@ -155,7 +167,8 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
             loss.item(),
         )
         # log batch loss, batch pck
-        average_meter.write_process(step, len(dataloader), epoch)
+        
+        # average_meter.write_process(step, len(dataloader), epoch)
         Logger.tbd_writer.add_histogram(
             tag="learner_grad",
             values=model.learner.layerweight.grad.detach().clone().view(-1),
@@ -165,7 +178,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
         # print("pck", eval_result["pck"], torch.tensor(eval_result["pck"]))
 
         # log running step loss
-        if training and args.use_wandb and (step % 20 == 0):
+        if training and args.use_wandb and (step % 60 == 0):
             running_avg_loss = utils.mean(average_meter.loss_buffer)
             running_avg_pck_sim = utils.mean(average_meter.buffer['sim']["pck"])
             running_avg_pck_votes = utils.mean(average_meter.buffer['votes']["pck"])
@@ -189,7 +202,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
                     },
                 )
 
-        if training and (step % 100 == 0):
+        if training and (step % 150 == 0):
             # 1. Draw weight map
             weight_map_path = os.path.join(Logger.logpath, "weight_map")
             os.makedirs(weight_map_path, exist_ok=True)
@@ -230,7 +243,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
                 )
 
     # 3. Draw class pck
-    if training:
+    if training and (epoch % 2)==0:
         draw_class_pck_path = os.path.join(Logger.logpath, "draw_class_pck")
         os.makedirs(draw_class_pck_path, exist_ok=True)
         class_pth = utils.draw_class_pck(
@@ -310,7 +323,7 @@ if __name__ == "__main__":
         args.run_id = wandb.util.generate_id()
 
     Logger.initialize(args)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
 
     # fmt: on
     # 1. CUDA and reproducibility
@@ -418,10 +431,11 @@ if __name__ == "__main__":
     test_ds = download.load_dataset(
         args.benchmark, args.datapath, args.thres, device, "test", img_side=img_side
     )
-
-    trn_dl = DataLoader(dataset=trn_ds, batch_size=args.batch_size, shuffle=True, num_workers=32)
-    val_dl = DataLoader(dataset=val_ds, batch_size=args.batch_size, shuffle=True, num_workers=32)
-    test_dl = DataLoader(dataset=test_ds, batch_size=args.batch_size, shuffle=False, num_workers=32)
+    num_workers = 32
+    pin_memory = True
+    trn_dl = DataLoader(dataset=trn_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory)
+    val_dl = DataLoader(dataset=val_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory)
+    test_dl = DataLoader(dataset=test_ds, batch_size=args.batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
 
     # 5.5 Scheduler
     if args.use_scheduler:
@@ -464,7 +478,8 @@ if __name__ == "__main__":
             # log_benchmark["val_pck_votes_geo"] = val_pck['votes_geo']
 
         # Save the best model
-        Logger.save_epoch(model, epoch, val_pck[args.loss_stage])
+        if (epoch%5)==0:
+            Logger.save_epoch(model, epoch, val_pck[args.loss_stage])
         if val_pck[args.loss_stage] > best_val_pck:
             old_best_val_pck = best_val_pck
             best_val_pck = val_pck[args.loss_stage]

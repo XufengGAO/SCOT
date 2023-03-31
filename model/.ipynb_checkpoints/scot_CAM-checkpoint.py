@@ -11,11 +11,11 @@ from . import resnet
 import torch.nn as nn
 from . import gating
 from .base.geometry import Geometry
-
+import numpy as np
 
 class SCOT_CAM(nn.Module):
     r"""SCOT framework"""
-    def __init__(self, backbone, hyperpixel_ids, benchmark, device, cam, use_xavier, img_side=(256,256), weight_thres=0.05):
+    def __init__(self, backbone, hyperpixel_ids, benchmark, device, cam, use_xavier=False, img_side=(256,256), weight_thres=0.05, select_all=0.85):
         r"""Constructor for SCOT framework"""
         super(SCOT_CAM, self).__init__()
 
@@ -45,9 +45,16 @@ class SCOT_CAM(nn.Module):
 
         # Hyperpixel id and pre-computed jump and receptive field size initialization
         # (the jump and receptive field sizes for 'fcn101' are heuristic values)
-        if backbone in ['resnet50', 'resnet101']:
-            self.jsz = torch.tensor([4, 4, 4, 4, 8, 8, 8, 8, 16, 16]).to(device)
-            self.rfsz = torch.tensor([11, 19, 27, 35, 43, 59, 75, 91, 107, 139]).to(device)
+        if backbone in ['resnet50']:
+            self.jsz = torch.tensor([4, 4, 4, 4, 8, 8, 8, 8, 16, 16, 16, 16, 16, 16, 32, 32, 32]).to(device)
+            self.rfsz = torch.tensor([11, 19, 27, 35, 43, 59, 75, 91, 107, 139, 171, 203, 235, 267, 299, 363, 427]).to(device)
+        elif backbone in ['resnet101']:
+            self.jsz = torch.tensor([4, 4, 4, 4, 8, 8, 8, 8, 16, 16, \
+                                     16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, \
+                                     16, 16, 16, 16, 32, 32, 32]).to(device)
+            self.rfsz = torch.tensor([11, 19, 27, 35, 43, 59, 75, 91, 107, 139,\
+                                    171, 203, 235, 267, 299, 331, 363, 395, 427, 459, 491, 523, 555, 587,\
+                                      619, 651, 683, 715, 747, 779, 811, 843, 907, 971]).to(device)
         elif backbone in ['resnet50_ft', 'resnet101_ft']:
             self.jsz = torch.tensor([4, 4, 4, 4, 8, 8, 8, 8, 8, 8]).to(device)
             self.rfsz = torch.tensor([11, 19, 27, 35, 43, 59, 75, 91, 107, 139]).to(device)
@@ -64,6 +71,8 @@ class SCOT_CAM(nn.Module):
         self.learner = gating.DynamicFeatureSelection(hyperpixel_ids, use_xavier, weight_thres).to(device)
         self.upsample_size = [int(img_side[0] / 4), int(img_side[1] / 4)]
 
+        self.select_all = select_all
+
         # TODO, remove it later
         # self.update_rfsz = 11
         # self.update_jsz = 4
@@ -73,9 +82,16 @@ class SCOT_CAM(nn.Module):
         r"""Forward pass"""
 
         # update the hyperpixel_ids by checking the weights
-        self.hyperpixel_ids = self.learner.return_hyperpixel_ids()
-        if self.hyperpixel_ids[0] > 9 or len(self.hyperpixel_ids) == 0:
-            self.hyperpixel_ids = [0] + self.hyperpixel_ids
+
+        prob = torch.rand(1).item()
+        
+        if prob > self.select_all:
+            n_layers = {"resnet50": 17, "resnet101": 34, "fcn101": 34}
+            self.hyperpixel_ids = list(range(n_layers[backbone]))
+        else:
+            self.hyperpixel_ids = self.learner.return_hyperpixel_ids()
+            # if self.hyperpixel_ids[0] > 9 or len(self.hyperpixel_ids) == 0:
+            #     self.hyperpixel_ids = [0] + self.hyperpixel_ids
 
 
         self.update_rfsz = self.rfsz[self.hyperpixel_ids[0]]
