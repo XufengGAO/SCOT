@@ -4,17 +4,17 @@ set -x
 
 benchmark="pfpascal"
 backbone="resnet101"
-
-python -m torch.utils.bottleneck train.py \
+# -m torch.utils.bottleneck
+python train.py \
     --benchmark $benchmark \
     --backbone $backbone \
     --weight_thres 0.10 \
     --select_all 0.90 \
     --supervision 'flow'\
-    --lr 0.0001 \
+    --lr 0.0003 \
     --momentum 0.9 \
-    --epochs 1 \
-    --batch_size 6 \
+    --epochs 100 \
+    --batch_size 8 \
     --optimizer 'sgd' \
     --exp1 1.0 \
     --exp2 0.5 \
@@ -23,9 +23,11 @@ python -m torch.utils.bottleneck train.py \
     --use_xavier False \
     --use_scheduler False \
     --use_grad_clip False \
-    --loss_stage "votes"    
-    
+    --loss_stage "votes" \
+    --split "trn"
+    #\
     # --use_pretrained True \
-    # --pretrained_path "/scratch/students/2023-spring-sp-xugao/SCOT/logs/_0330_151508.log/best_model.pt"\
-    # --run_id "5h6kghje" \
-    # --start_epoch 18 \
+    # --pretrained_path "/scratch/students/2023-spring-sp-xugao/SCOT/logs/_0331_232809.log/best_model.pt"\
+    # --run_id "xxduk35l" \
+    # --logpath "logs/_0331_232809.log" \
+    # --start_epoch 26

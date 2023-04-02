@@ -6,7 +6,7 @@ import os
 
 from torch.utils.data import DataLoader
 import torch
-
+import time
 from PIL import Image
 from data import download
 from model import scot_CAM, util, geometry
@@ -168,12 +168,14 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
         )
         # log batch loss, batch pck
         
-        # average_meter.write_process(step, len(dataloader), epoch)
-        Logger.tbd_writer.add_histogram(
-            tag="learner_grad",
-            values=model.learner.layerweight.grad.detach().clone().view(-1),
-            global_step=step,
-        )
+        if training and (step % 60 == 0):
+            average_meter.write_process(step, len(dataloader), epoch)
+        
+        # Logger.tbd_writer.add_histogram(
+        #     tag="learner_grad",
+        #     values=model.learner.layerweight.grad.detach().clone().view(-1),
+        #     global_step=step,
+        # )
 
         # print("pck", eval_result["pck"], torch.tensor(eval_result["pck"]))
 
@@ -282,7 +284,7 @@ if __name__ == "__main__":
     parser.add_argument('--thres', type=str, default='auto', choices=['auto', 'img', 'bbox'])
     parser.add_argument('--alpha', type=float, default=0.1)
     parser.add_argument('--logpath', type=str, default='')
-    parser.add_argument('--split', type=str, default='trn', help='trn,val.test') 
+    parser.add_argument('--split', type=str, default='trn', help='trn,val.test, old_trn') 
 
     # Training parameters
     parser.add_argument('--supervision', type=str, default='strong', choices=['weak', 'strong', 'flow'])
@@ -422,7 +424,7 @@ if __name__ == "__main__":
 
     # 5. Dataset download & initialization
     trn_ds = download.load_dataset(
-        args.benchmark, args.datapath, args.thres, device, "trn", img_side=img_side
+        args.benchmark, args.datapath, args.thres, device, args.split, img_side=img_side
     )
     val_ds = download.load_dataset(
         args.benchmark, args.datapath, args.thres, device, "val", img_side=img_side
@@ -431,7 +433,7 @@ if __name__ == "__main__":
     test_ds = download.load_dataset(
         args.benchmark, args.datapath, args.thres, device, "test", img_side=img_side
     )
-    num_workers = 32
+    num_workers = 16
     pin_memory = True
     trn_dl = DataLoader(dataset=trn_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory)
     val_dl = DataLoader(dataset=val_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory)
@@ -456,7 +458,9 @@ if __name__ == "__main__":
     # 7. Train SCOT
     best_val_pck = float("-inf")
     log_benchmark = {}
-    for epoch in range(args.start_epoch, args.epochs):
+    print("Training Start")
+    train_started = time.time()
+    for epoch in range(args.start_epoch, args.epochs+1):
         trn_loss, trn_pck = train(
             epoch, model, trn_dl, strategy, optimizer, training=True, args=args, scheduler=scheduler
         )
@@ -515,6 +519,9 @@ if __name__ == "__main__":
                     "test_pck_votes_geo":test_pck['votes_geo'],
                 }
             )
+        time_message = 'Training %d tooks:%4.3f' % (epoch+1, (time.time()-train_started)/60) + ' minutes'
+        Logger.info(time_message)
+        # print(time_message)
 
     #     Logger.tbd_writer.add_scalars(
     #         "data/loss", {"trn_loss": trn_loss, "val_loss": val_loss}, epoch
@@ -523,5 +530,8 @@ if __name__ == "__main__":
     #         "data/pck", {"trn_pck": trn_pck, "val_pck": val_pck}, epoch
     #     )
 
-    Logger.tbd_writer.close()
+    # Logger.tbd_writer.close()
     Logger.info("==================== Finished training ====================")
+    time_message = 'Training tooks:%4.3f' % ((time.time()-train_started)/60) + ' minutes'
+    Logger.info(time_message)
+    # print(time_message)

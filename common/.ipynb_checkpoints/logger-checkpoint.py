@@ -15,13 +15,18 @@ class Logger:
     @classmethod
     def initialize(cls, args):
         logtime = datetime.datetime.now().__format__('_%m%d_%H%M%S')
-        logpath = args.logpath
-
-        cls.logpath = os.path.join('logs', logpath + logtime + '.log')
+        if args.logpath == "":
+            logpath = args.logpath
+            cls.logpath = os.path.join('logs', logpath + logtime + '.log')
+            os.makedirs(cls.logpath)
+            filemode = 'w'
+        else:
+            cls.logpath = args.logpath
+            filemode = 'a'
+        
         cls.benchmark = args.benchmark
-        os.makedirs(cls.logpath)
 
-        logging.basicConfig(filemode='w',
+        logging.basicConfig(filemode=filemode,
                             filename=os.path.join(cls.logpath, 'log.txt'),
                             level=logging.INFO,
                             format='%(message)s',
@@ -35,7 +40,7 @@ class Logger:
         logging.getLogger('').addHandler(console)
 
         # Tensorboard writer
-        cls.tbd_writer = SummaryWriter(os.path.join(cls.logpath, 'tbd/runs'))
+#         cls.tbd_writer = SummaryWriter(os.path.join(cls.logpath, 'tbd/runs'))
         
 
         # Log arguments
