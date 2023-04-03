@@ -10,10 +10,10 @@ python train.py \
     --backbone $backbone \
     --weight_thres 0.10 \
     --select_all 0.90 \
-    --supervision 'flow'\
+    --supervision 'strong'\
     --alpha 0.1 \
     --lr 0.0005 \
-    --momentum 0.5 \
+    --momentum 0.9 \
     --epochs 100 \
     --batch_size 8 \
     --optimizer 'sgd' \

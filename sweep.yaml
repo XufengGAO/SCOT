@@ -17,17 +17,19 @@ parameters:
   # start_epoch:
   #   value: 18
   weight_thres:
-    values: [0.0, 0.05, 0.1, 0.15, 0.2]
+    value: 0.10
   select_all:
-    values: [1.0, 0.9, 0.85, 0.8]
+    value: 0.90
   lr:
-    values: [0.0005, 0.0001]
+    values: [0.001, 0.0003, 0.0005, 0.0001]
   epochs:
-    value: 28
+    value: 50
   batch_size:
-    value: 6
+    value: 8
   optimizer:
     value: 'sgd'
+  momentum:
+    value: 0.9
   # 0.001, 0.0001, 0.00001, 0.000001, 0.01 
   # weight_decay:
   #   values: [0.005, 0.00001, 0.0001, 0.001, 0.01,0]
@@ -50,7 +52,7 @@ parameters:
   loss_stage:
     values: ["votes"]
   supervision:
-    values: ["flow"]
+    values: ["strong"]
     # , "votes", "votes_geo" "sim", "votes"， 
 
 

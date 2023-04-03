@@ -319,6 +319,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--run_id', type=str, default='', help='run_id')
 
+    
     args = parser.parse_args()
 
     if args.use_wandb and args.run_id == '':
@@ -395,7 +396,12 @@ if __name__ == "__main__":
         )
 
     if args.use_wandb:
-        run = wandb.init(project="SCOT", config=args, id=args.run_id, resume="allow")
+        
+        wandb_name = "%.e_%s_%s_%s"%(args.lr, args.loss_stage, args.supervision, args.optimizer)
+        if args.optimizer == "sgd":
+            wandb_name = wandb_name + "_m%.2f"%(args.momentum)
+         
+        run = wandb.init(project="SCOT", config=args, id=args.run_id, resume="allow", name=wandb_name)
         # wandb.watch(model.learner, log="all", log_freq=100)
         wandb.define_metric("iters")
         wandb.define_metric("grad_ratio", step_metric="iters")

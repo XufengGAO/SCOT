@@ -16,8 +16,12 @@ class Logger:
     def initialize(cls, args):
         logtime = datetime.datetime.now().__format__('_%m%d_%H%M%S')
         if args.logpath == "":
-            logpath = args.logpath
-            cls.logpath = os.path.join('logs', logpath + logtime + '.log')
+            logpath = "%.e_%s_%s_%s"%(args.lr, args.loss_stage, args.supervision, args.optimizer)
+            
+            if args.optimizer == "sgd":
+                logpath = logpath + "_m%.2f"%(args.momentum)
+
+            cls.logpath = os.path.join('logs', logpath + '.log')
             os.makedirs(cls.logpath)
             filemode = 'w'
         else:
