@@ -148,7 +148,7 @@ class SCOT_CAM(nn.Module):
         # TODO: modify it later
         # len return 1st dim
         # weight: (4, 4096, 1)
-        weights = torch.ones(len(hyperfeats), hyperfeats.size()[1], 1).to(hyperfeats.device)
+        weights = torch.ones(len(hyperfeats), hyperfeats.size()[1]).to(hyperfeats.device)
         # weight points, CAM weighter pixels importance
         if classmap in [1]: 
             if mask is None:
@@ -173,13 +173,16 @@ class SCOT_CAM(nn.Module):
             weights[hselect>0.5*scale] = 0.9
             weights[hselect>0.6*scale] = 1.0
 
-            # print(weights)
+            # print('clasmap', weights.size())
 
+            del hpos
+            del hselect
+            
+        # print('no-clasmap', weights.size())
         # print(img.size())
         # print(img.size()[2:][::-1], weights.unsqueeze(-1).size())
 
-        del hpos
-        del hselect
+        
 
         return hpgeometry, hyperfeats, img.size()[2:][::-1], weights.unsqueeze(-1)
 
@@ -353,6 +356,9 @@ class SCOT_CAM(nn.Module):
 
     def state_dict(self):
         return self.learner.state_dict()
+    
+    def load_backbone(self, state_dict):
+        self.backbone.load_state_dict(state_dict, strict=False)
 
     def load_state_dict(self, state_dict):
         self.learner.load_state_dict(state_dict)

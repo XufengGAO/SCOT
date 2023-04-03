@@ -22,7 +22,7 @@ class Logger:
                 logpath = logpath + "_m%.2f"%(args.momentum)
 
             cls.logpath = os.path.join('logs', logpath + '.log')
-            os.makedirs(cls.logpath)
+            os.makedirs(cls.logpath, exist_ok=True)
             filemode = 'w'
         else:
             cls.logpath = args.logpath

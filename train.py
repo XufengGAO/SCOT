@@ -61,6 +61,8 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
     else:
         model.eval()
 
+    # print(model.backbone.training, model.learner.training)
+
     average_meter = AverageMeter(dataloader.dataset.benchmark, cls=dataloader.dataset.cls)
     total_steps = len(dataloader)
     lrs = []
@@ -281,10 +283,11 @@ if __name__ == "__main__":
     parser.add_argument('--datapath', type=str, default='./Datasets_SCOT') 
     parser.add_argument('--benchmark', type=str, default='pfpascal')
     parser.add_argument('--backbone', type=str, default='resnet50')
+    parser.add_argument('--selfsup', type=str, default='supervised', choices=['supervised', 'dino', 'denseCL'])
     parser.add_argument('--thres', type=str, default='auto', choices=['auto', 'img', 'bbox'])
     parser.add_argument('--alpha', type=float, default=0.1)
     parser.add_argument('--logpath', type=str, default='')
-    parser.add_argument('--split', type=str, default='trn', help='trn,val.test, old_trn') 
+    parser.add_argument('--split', type=str, default='trn', help='trn, val, test, old_trn') 
 
     # Training parameters
     parser.add_argument('--supervision', type=str, default='strong', choices=['weak', 'strong', 'flow'])
@@ -300,11 +303,12 @@ if __name__ == "__main__":
     parser.add_argument("--scheduler", type=str, default="cycle", choices=["cycle", "cosine"])
     parser.add_argument("--use_grad_clip", type=util.boolean_string, nargs="?", default=False)
     parser.add_argument("--grad_clip", type=float, default=0.1) 
-    parser.add_argument("--use_wandb", type= utils.boolean_string, nargs="?", const=True, default=True)
-    parser.add_argument("--use_xavier", type= utils.boolean_string, nargs="?", const=True, default=True)
+    parser.add_argument("--use_wandb", type= utils.boolean_string, nargs="?", default=False)
+    parser.add_argument("--use_xavier", type= utils.boolean_string, nargs="?", default=False)
     parser.add_argument('--loss_stage', type=str, default="sim", choices=["sim", "votes", "votes_geo"])
     parser.add_argument("--use_pretrained", type= utils.boolean_string, nargs="?", const=True, default=False)
     parser.add_argument('--pretrained_path', type=str, default='')
+    parser.add_argument('--backbone_path', type=str, default='')
     parser.add_argument('--weight_thres', type=float, default=0.05,help='weight_thres (default: 0.05)')
     parser.add_argument('--select_all', type=float, default=0.85,help='selec all probability (default: 1.0)')
 
@@ -319,15 +323,16 @@ if __name__ == "__main__":
 
     parser.add_argument('--run_id', type=str, default='', help='run_id')
 
-    
     args = parser.parse_args()
+
+    if args.selfsup in ['dino', 'denseCL']:
+        args.classmap = 0
 
     if args.use_wandb and args.run_id == '':
         args.run_id = wandb.util.generate_id()
 
     Logger.initialize(args)
     
-
     # fmt: on
     # 1. CUDA and reproducibility
     if torch.cuda.is_available():
@@ -353,7 +358,24 @@ if __name__ == "__main__":
     )
 
     if args.use_pretrained:
-        model.load_state_dict(torch.load(args.pretrained_path))
+        model.load_state_dict(torch.load(args.pretrained_path, map_location=device))
+
+    if args.selfsup in ['dino', 'denseCL']:
+        # print(model.backbone.conv1.weight[1,:,:2,:2])
+        # print(model.backbone.fc.weight[:2,:5])
+
+        pretrained_backbone = torch.load(args.backbone_path, map_location=device)
+        backbone_keys = list(model.backbone.state_dict().keys())
+        load_keys = list(pretrained_backbone.keys())
+        missing_keys = [i for i in backbone_keys if i not in load_keys]
+
+        if 'state_dict' in pretrained_backbone:
+            model.load_backbone(pretrained_backbone['state_dict'])
+        else:
+            model.load_backbone(pretrained_backbone)
+
+        # print(model.backbone.conv1.weight[1,:,:2,:2])
+        # print(model.backbone.fc.weight[:2,:5])
 
     # 4. Objective and Optimizer
     Objective.initialize(target_rate=0.5, alpha=args.alpha)
@@ -396,7 +418,6 @@ if __name__ == "__main__":
         )
 
     if args.use_wandb:
-        
         wandb_name = "%.e_%s_%s_%s"%(args.lr, args.loss_stage, args.supervision, args.optimizer)
         if args.optimizer == "sgd":
             wandb_name = wandb_name + "_m%.2f"%(args.momentum)
@@ -429,7 +450,7 @@ if __name__ == "__main__":
         
 
     # 5. Dataset download & initialization
-    num_workers = 16
+    num_workers = 16 if torch.cuda.is_available() else 8
     pin_memory = True
     
     trn_ds = download.load_dataset(

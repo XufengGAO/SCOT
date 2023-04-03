@@ -20,6 +20,9 @@ def perform_sinkhorn(C,epsilon,mu,nu,a=[],warm=False,niter=10,tol=10e-9):
 
     K = torch.exp(-C/epsilon)
 
+    # print(K.size(), a.size()) # [2, 4096, 4096], ([2, 4096, 1])
+    # print(mu.size(), nu.size())
+
     Err = torch.zeros((niter,2)).to(device)
     # Err = torch.zeros((niter,2)).cuda()
     for i in range(niter):
@@ -91,8 +94,9 @@ def appearance_similarityOT(src_feats, trg_feats, exp1=1.0, exp2=1.0, eps=0.05, 
     ## ---- <Run Optimal Transport Algorithm> ----
     #mu = mu.unsqueeze(1)
     #nu = nu.unsqueeze(1)
+    # print('cost', cost.size()) # [2, 4096, 4096]
+    # print('mu/nu', mu.size(), nu.size()) # [2, 4096, 1, 1]
 
-    # print(mu.size(), nu.size())
 
 
     # with torch.no_grad():
