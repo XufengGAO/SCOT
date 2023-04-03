@@ -8,16 +8,18 @@ parameters:
     value: 'pfpascal'
   backbone:
     value: 'resnet101'
-  use_pretrained:
-    value: True
-  pretrained_path: 
-    value: "/scratch/students/2023-spring-sp-xugao/SCOT/logs/_0330_151508.log/best_model.pt"
+  # use_pretrained:
+  #   value: True
+  # pretrained_path: 
+  #   value: "/scratch/students/2023-spring-sp-xugao/SCOT/logs/_0330_151508.log/best_model.pt"
   # run_id:
   #   value: "5h6kghje"
-  start_epoch:
-    value: 18
+  # start_epoch:
+  #   value: 18
   weight_thres:
-    value: 0.1
+    values: [0.0, 0.05, 0.1, 0.15, 0.2]
+  select_all:
+    values: [1.0, 0.9, 0.85, 0.8]
   lr:
     values: [0.0005, 0.0001]
   epochs:

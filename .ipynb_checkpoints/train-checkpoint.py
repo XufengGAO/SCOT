@@ -180,7 +180,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
         # print("pck", eval_result["pck"], torch.tensor(eval_result["pck"]))
 
         # log running step loss
-        if training and args.use_wandb and (step % 60 == 0):
+        if training and args.use_wandb and (step % 100 == 0):
             running_avg_loss = utils.mean(average_meter.loss_buffer)
             running_avg_pck_sim = utils.mean(average_meter.buffer['sim']["pck"])
             running_avg_pck_votes = utils.mean(average_meter.buffer['votes']["pck"])
@@ -204,7 +204,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
                     },
                 )
 
-        if training and (step % 150 == 0):
+        if training and (step % 250 == 0):
             # 1. Draw weight map
             weight_map_path = os.path.join(Logger.logpath, "weight_map")
             os.makedirs(weight_map_path, exist_ok=True)
@@ -306,7 +306,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_pretrained", type= utils.boolean_string, nargs="?", const=True, default=False)
     parser.add_argument('--pretrained_path', type=str, default='')
     parser.add_argument('--weight_thres', type=float, default=0.05,help='weight_thres (default: 0.05)')
-    parser.add_argument('--select_all', type=float, default=0.85,help='selec all probability (default: 0.85)')
+    parser.add_argument('--select_all', type=float, default=0.85,help='selec all probability (default: 1.0)')
 
     # Algorithm parameters
     parser.add_argument('--sim', type=str, default='OTGeo', help='Similarity type: OT, OTGeo, cos, cosGeo')
@@ -423,20 +423,24 @@ if __name__ == "__main__":
         
 
     # 5. Dataset download & initialization
+    num_workers = 16
+    pin_memory = True
+    
     trn_ds = download.load_dataset(
         args.benchmark, args.datapath, args.thres, device, args.split, img_side=img_side
     )
-    val_ds = download.load_dataset(
-        args.benchmark, args.datapath, args.thres, device, "val", img_side=img_side
-    )
+    trn_dl = DataLoader(dataset=trn_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory)
+    
+    if args.split != "val":
+        val_ds = download.load_dataset(
+            args.benchmark, args.datapath, args.thres, device, "val", img_side=img_side
+        )
+        val_dl = DataLoader(dataset=val_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory)
     
     test_ds = download.load_dataset(
         args.benchmark, args.datapath, args.thres, device, "test", img_side=img_side
     )
-    num_workers = 16
-    pin_memory = True
-    trn_dl = DataLoader(dataset=trn_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory)
-    val_dl = DataLoader(dataset=val_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory)
+    
     test_dl = DataLoader(dataset=test_ds, batch_size=args.batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
 
     # 5.5 Scheduler
@@ -464,62 +468,67 @@ if __name__ == "__main__":
         trn_loss, trn_pck = train(
             epoch, model, trn_dl, strategy, optimizer, training=True, args=args, scheduler=scheduler
         )
-
-        # log_benchmark["trn_loss"] = trn_loss
-        # log_benchmark["trn_pck_sim"] = trn_pck['sim']
-        # log_benchmark["trn_pck_votes"] = trn_pck['votes']
-        # log_benchmark["trn_pck_votes_geo"] = trn_pck['votes_geo']
+        log_benchmark["trn_loss"] = trn_loss
+        log_benchmark["trn_pck_sim"] = trn_pck['sim']
+        log_benchmark["trn_pck_votes"] = trn_pck['votes']
+        log_benchmark["trn_pck_votes_geo"] = trn_pck['votes_geo']
         
-        with torch.no_grad():
-            val_loss, val_pck = train(
-                epoch, model, val_dl, strategy, optimizer, training=False, args=args
-            )
+        if args.split != "val":
+            with torch.no_grad():
+                val_loss, val_pck = train(
+                    epoch, model, val_dl, strategy, optimizer, training=False, args=args
+                )
 
-
-            # log_benchmark["val_loss"] = val_loss
-            # log_benchmark["val_pck_sim"] = val_pck['sim']
-            # log_benchmark["val_pck_votes"] = val_pck['votes']
-            # log_benchmark["val_pck_votes_geo"] = val_pck['votes_geo']
+                log_benchmark["val_loss"] = val_loss
+                log_benchmark["val_pck_sim"] = val_pck['sim']
+                log_benchmark["val_pck_votes"] = val_pck['votes']
+                log_benchmark["val_pck_votes_geo"] = val_pck['votes_geo']
 
         # Save the best model
+        
+        if args.split in ['old_trn', 'trn']:
+            model_pck = val_pck
+        else:
+            model_pck = trn_pck
+            
         if (epoch%5)==0:
-            Logger.save_epoch(model, epoch, val_pck[args.loss_stage])
-        if val_pck[args.loss_stage] > best_val_pck:
+            Logger.save_epoch(model, epoch, model_pck[args.loss_stage])
+        if model_pck[args.loss_stage] > best_val_pck:
             old_best_val_pck = best_val_pck
-            best_val_pck = val_pck[args.loss_stage]
+            best_val_pck = model_pck[args.loss_stage]
             Logger.save_model(model, epoch, best_val_pck, old_best_val_pck)
 
         with torch.no_grad():
             _, test_pck = train(
                 epoch, model, test_dl, strategy, optimizer, training=False, args=args, testing=True
             )
-#             log_benchmark["test_pck_sim"] = test_pck['sim']
-#             log_benchmark["test_pck_votes"] = test_pck['votes']
-#             log_benchmark["test_pck_votes_geo"] = test_pck['votes_geo']
+            log_benchmark["test_pck_sim"] = test_pck['sim']
+            log_benchmark["test_pck_votes"] = test_pck['votes']
+            log_benchmark["test_pck_votes_geo"] = test_pck['votes_geo']
 
 #         log_benchmark["epochs"] = epoch
         if args.use_wandb:
             wandb.log({'epochs':epoch})
-            # wandb.log(log_benchmark)
+            wandb.log(log_benchmark)
 
-            wandb.log(
-                {
-                    "trn_loss": trn_loss,
-                    "trn_pck_sim": trn_pck['sim'],
-                    "trn_pck_votes": trn_pck['votes'],
-                    "trn_pck_votes_geo": trn_pck['votes_geo'],
+#             wandb.log(
+#                 {
+#                     "trn_loss": trn_loss,
+#                     "trn_pck_sim": trn_pck['sim'],
+#                     "trn_pck_votes": trn_pck['votes'],
+#                     "trn_pck_votes_geo": trn_pck['votes_geo'],
 
-                    "val_loss":val_loss,
-                    "val_pck_sim":val_pck['sim'],
-                    "val_pck_votes":val_pck['votes'],
-                    "val_pck_votes_geo":val_pck['votes_geo'],
+#                     "val_loss":val_loss,
+#                     "val_pck_sim":val_pck['sim'],
+#                     "val_pck_votes":val_pck['votes'],
+#                     "val_pck_votes_geo":val_pck['votes_geo'],
 
-                    "test_pck_sim":test_pck['sim'],
-                    "test_pck_votes":test_pck['votes'],
-                    "test_pck_votes_geo":test_pck['votes_geo'],
-                }
-            )
-        time_message = 'Training %d tooks:%4.3f' % (epoch+1, (time.time()-train_started)/60) + ' minutes'
+#                     "test_pck_sim":test_pck['sim'],
+#                     "test_pck_votes":test_pck['votes'],
+#                     "test_pck_votes_geo":test_pck['votes_geo'],
+#                 }
+#             )
+        time_message = 'Training %d epochs took:%4.3f' % (epoch+1, (time.time()-train_started)/60) + ' minutes'
         Logger.info(time_message)
         # print(time_message)
 
@@ -532,6 +541,5 @@ if __name__ == "__main__":
 
     # Logger.tbd_writer.close()
     Logger.info("==================== Finished training ====================")
-    time_message = 'Training tooks:%4.3f' % ((time.time()-train_started)/60) + ' minutes'
     Logger.info(time_message)
     # print(time_message)
