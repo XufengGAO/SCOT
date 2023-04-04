@@ -20,9 +20,12 @@ class Logger:
             
             if args.optimizer == "sgd":
                 logpath = logpath + "_m%.2f"%(args.momentum)
+                
+            # if args.selfsup in ['dino', 'denseCL']:
+            logpath = logpath + "_%s_%s"%(args.selfsup, args.backbone)
 
             cls.logpath = os.path.join('logs', logpath + '.log')
-            os.makedirs(cls.logpath)
+            os.makedirs(cls.logpath, exist_ok=True)
             filemode = 'w'
         else:
             cls.logpath = args.logpath
@@ -143,7 +146,7 @@ class AverageMeter:
         # print(self.loss_buffer)
 
     def write_result(self, split, epoch=-1):
-        msg = '\n*** %s ' % split
+        msg = '*** %s ' % split
         msg += '[@Epoch %02d] ' % epoch if epoch > -1 else ''
 
         if len(self.loss_buffer) > 0:

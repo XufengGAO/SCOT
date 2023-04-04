@@ -61,6 +61,8 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
     else:
         model.eval()
 
+    # print(model.backbone.training, model.learner.training)
+
     average_meter = AverageMeter(dataloader.dataset.benchmark, cls=dataloader.dataset.cls)
     total_steps = len(dataloader)
     lrs = []
@@ -166,10 +168,14 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
             batch["pair_class"],
             loss.item(),
         )
+        
+        # print('eval_result_list', type(eval_result_list[0]), type(batch["pair_class"][0]) )
+        # print(eval_result_list)
+        
         # log batch loss, batch pck
         
-        if training and (step % 60 == 0):
-            average_meter.write_process(step, len(dataloader), epoch)
+        # if training and (step % 60 == 0):
+        #     average_meter.write_process(step, len(dataloader), epoch)
         
         # Logger.tbd_writer.add_histogram(
         #     tag="learner_grad",
@@ -179,24 +185,30 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
 
         # print("pck", eval_result["pck"], torch.tensor(eval_result["pck"]))
 
-        # log running step loss
+        # log running step loss 
         if training and args.use_wandb and (step % 100 == 0):
             running_avg_loss = utils.mean(average_meter.loss_buffer)
             running_avg_pck_sim = utils.mean(average_meter.buffer['sim']["pck"])
             running_avg_pck_votes = utils.mean(average_meter.buffer['votes']["pck"])
             running_avg_pck_votes_geo = utils.mean(average_meter.buffer['votes_geo']["pck"])
 
-            grad_ratio = torch.norm(
+            grad_ratio = (torch.norm(
                 model.learner.layerweight.grad.detach().clone().view(-1)
             ) / (
                 torch.norm(model.learner.layerweight.detach().clone().view(-1)) + 1e-20
-            )
+            )).item()
+            
+            # print(type(running_avg_loss))
+            # print(type(running_avg_pck_sim))
+            # print(type(running_avg_pck_votes))
+            # print(type(running_avg_pck_votes_geo))
+            # print(type(grad_ratio))
 
             if args.use_wandb:
                 wandb.log({"iters": iters})
                 wandb.log(
                     {
-                        "grad_ratio": grad_ratio.item(),
+                        "grad_ratio": grad_ratio,
                         "running_trn_avg_loss": running_avg_loss,
                         "running_avg_pck_sim": running_avg_pck_sim,
                         "running_avg_pck_votes": running_avg_pck_votes,
@@ -204,7 +216,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
                     },
                 )
 
-        if training and (step % 250 == 0):
+        if training and args.use_wandb and (step % 250 == 0):
             # 1. Draw weight map
             weight_map_path = os.path.join(Logger.logpath, "weight_map")
             os.makedirs(weight_map_path, exist_ok=True)
@@ -218,34 +230,34 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
             # plt.close(fig)
 
             # 2. Draw matches
-            min_pck, min_pck_idx = torch.tensor(eval_result_list[2]["pck"]).min(dim=0)
-            src_img = dataloader.dataset.get_image(batch["src_imname"][min_pck_idx])
-            trg_img = dataloader.dataset.get_image(batch["trg_imname"][min_pck_idx])
-            draw_match_path = os.path.join(Logger.logpath, "draw_match")
-            os.makedirs(draw_match_path, exist_ok=True)
-            match_pth = utils.draw_matches_on_image(
-                epoch,
-                step,
-                min_pck_idx.item(),
-                min_pck,
-                src_img,
-                trg_img,
-                batch,
-                pred_trg_kps=prd_kps_list[2][min_pck_idx],
-                origin=True,
-                color_ids=eval_result_list[2]["pck_ids"][min_pck_idx],
-                draw_match_path=draw_match_path,
-            )
+            # min_pck, min_pck_idx = torch.tensor(eval_result_list[2]["pck"]).min(dim=0)
+            # src_img = dataloader.dataset.get_image(batch["src_imname"][min_pck_idx])
+            # trg_img = dataloader.dataset.get_image(batch["trg_imname"][min_pck_idx])
+            # draw_match_path = os.path.join(Logger.logpath, "draw_match")
+            # os.makedirs(draw_match_path, exist_ok=True)
+            # match_pth = utils.draw_matches_on_image(
+            #     epoch,
+            #     step,
+            #     min_pck_idx.item(),
+            #     min_pck,
+            #     src_img,
+            #     trg_img,
+            #     batch,
+            #     pred_trg_kps=prd_kps_list[2][min_pck_idx],
+            #     origin=True,
+            #     color_ids=eval_result_list[2]["pck_ids"][min_pck_idx],
+            #     draw_match_path=draw_match_path,
+            # )
             if args.use_wandb:
                 wandb.log(
                     {
                         "weight_map": wandb.Image(Image.open(weight_pth).convert("RGB")),
-                        "match_map": wandb.Image(Image.open(match_pth).convert("RGB"))
+                        # "match_map": wandb.Image(Image.open(match_pth).convert("RGB"))
                     }
                 )
-
+                
     # 3. Draw class pck
-    if training and (epoch % 2)==0:
+    if training and args.use_wandb and (epoch % 2)==0:
         draw_class_pck_path = os.path.join(Logger.logpath, "draw_class_pck")
         os.makedirs(draw_class_pck_path, exist_ok=True)
         class_pth = utils.draw_class_pck(
@@ -281,10 +293,11 @@ if __name__ == "__main__":
     parser.add_argument('--datapath', type=str, default='./Datasets_SCOT') 
     parser.add_argument('--benchmark', type=str, default='pfpascal')
     parser.add_argument('--backbone', type=str, default='resnet50')
+    parser.add_argument('--selfsup', type=str, default='supervised', choices=['sup', 'dino', 'denseCL'])
     parser.add_argument('--thres', type=str, default='auto', choices=['auto', 'img', 'bbox'])
     parser.add_argument('--alpha', type=float, default=0.1)
     parser.add_argument('--logpath', type=str, default='')
-    parser.add_argument('--split', type=str, default='trn', help='trn,val.test, old_trn') 
+    parser.add_argument('--split', type=str, default='trn', help='trn, val, test, old_trn') 
 
     # Training parameters
     parser.add_argument('--supervision', type=str, default='strong', choices=['weak', 'strong', 'flow'])
@@ -300,11 +313,12 @@ if __name__ == "__main__":
     parser.add_argument("--scheduler", type=str, default="cycle", choices=["cycle", "cosine"])
     parser.add_argument("--use_grad_clip", type=util.boolean_string, nargs="?", default=False)
     parser.add_argument("--grad_clip", type=float, default=0.1) 
-    parser.add_argument("--use_wandb", type= utils.boolean_string, nargs="?", const=True, default=True)
-    parser.add_argument("--use_xavier", type= utils.boolean_string, nargs="?", const=True, default=True)
+    parser.add_argument("--use_wandb", type= utils.boolean_string, nargs="?", default=False)
+    parser.add_argument("--use_xavier", type= utils.boolean_string, nargs="?", default=False)
     parser.add_argument('--loss_stage', type=str, default="sim", choices=["sim", "votes", "votes_geo"])
     parser.add_argument("--use_pretrained", type= utils.boolean_string, nargs="?", const=True, default=False)
     parser.add_argument('--pretrained_path', type=str, default='')
+    parser.add_argument('--backbone_path', type=str, default='./backbone')
     parser.add_argument('--weight_thres', type=float, default=0.05,help='weight_thres (default: 0.05)')
     parser.add_argument('--select_all', type=float, default=0.85,help='selec all probability (default: 1.0)')
 
@@ -319,15 +333,17 @@ if __name__ == "__main__":
 
     parser.add_argument('--run_id', type=str, default='', help='run_id')
 
-    
     args = parser.parse_args()
+
+    if args.selfsup in ['dino', 'denseCL']:
+        args.backbone_path = os.path.join(args.backbone_path, "%s_%s.pth"%(args.selfsup, args.backbone))
+        args.classmap = 0
 
     if args.use_wandb and args.run_id == '':
         args.run_id = wandb.util.generate_id()
 
     Logger.initialize(args)
     
-
     # fmt: on
     # 1. CUDA and reproducibility
     if torch.cuda.is_available():
@@ -353,7 +369,24 @@ if __name__ == "__main__":
     )
 
     if args.use_pretrained:
-        model.load_state_dict(torch.load(args.pretrained_path))
+        model.load_state_dict(torch.load(args.pretrained_path, map_location=device))
+
+    if args.selfsup in ['dino', 'denseCL']:
+        # print(model.backbone.conv1.weight[1,:,:2,:2])
+        # print(model.backbone.fc.weight[:2,:5])
+        pretrained_backbone = torch.load(args.backbone_path, map_location=device)
+        backbone_keys = list(model.backbone.state_dict().keys())
+            
+        if 'state_dict' in pretrained_backbone:
+            model.load_backbone(pretrained_backbone['state_dict'])
+            load_keys = list(pretrained_backbone['state_dict'].keys())
+        else:
+            model.load_backbone(pretrained_backbone)
+            load_keys = list(pretrained_backbone.keys())
+        missing_keys = [i for i in backbone_keys if i not in load_keys]
+        print(missing_keys)
+        # print(model.backbone.conv1.weight[1,:,:2,:2])
+        # print(model.backbone.fc.weight[:2,:5])
 
     # 4. Objective and Optimizer
     Objective.initialize(target_rate=0.5, alpha=args.alpha)
@@ -396,11 +429,13 @@ if __name__ == "__main__":
         )
 
     if args.use_wandb:
-        
         wandb_name = "%.e_%s_%s_%s"%(args.lr, args.loss_stage, args.supervision, args.optimizer)
         if args.optimizer == "sgd":
             wandb_name = wandb_name + "_m%.2f"%(args.momentum)
-         
+            
+        # if args.selfsup in ['dino', 'denseCL']:
+        wandb_name = wandb_name + "_%s_%s"%(args.selfsup, args.backbone)
+
         run = wandb.init(project="SCOT", config=args, id=args.run_id, resume="allow", name=wandb_name)
         # wandb.watch(model.learner, log="all", log_freq=100)
         wandb.define_metric("iters")
@@ -429,7 +464,7 @@ if __name__ == "__main__":
         
 
     # 5. Dataset download & initialization
-    num_workers = 16
+    num_workers = 16 if torch.cuda.is_available() else 8
     pin_memory = True
     
     trn_ds = download.load_dataset(
@@ -534,7 +569,7 @@ if __name__ == "__main__":
 #                     "test_pck_votes_geo":test_pck['votes_geo'],
 #                 }
 #             )
-        time_message = 'Training %d epochs took:%4.3f' % (epoch+1, (time.time()-train_started)/60) + ' minutes'
+        time_message = 'Training %d epochs took:%4.3f\n' % (epoch+1, (time.time()-train_started)/60) + ' minutes'
         Logger.info(time_message)
         # print(time_message)
 
