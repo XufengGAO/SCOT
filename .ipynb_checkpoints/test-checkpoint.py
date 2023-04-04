@@ -176,7 +176,7 @@ if __name__ == "__main__":
             )
             
             
-            confidence_ts = votes.squeeze(dim=0)
+            confidence_ts = votes_geo.squeeze(dim=0)
             conf, trg_indices = torch.max(confidence_ts, dim=1)
             unique, inv = torch.unique(trg_indices, sorted=False, return_inverse=True)
             trgpt_list.append(len(unique))

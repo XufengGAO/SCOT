@@ -14,4 +14,4 @@ python test.py \
     --exp2 0.5 \
     --classmap 1 \
     --split "test" \
-    --pretrained_path "./backbone/eooch_100.pt"
+    --pretrained_path "./backbone/ckp.pt"
