@@ -15,7 +15,7 @@ import numpy as np
 
 class SCOT_CAM(nn.Module):
     r"""SCOT framework"""
-    def __init__(self, backbone, hyperpixel_ids, benchmark, device, cam, use_xavier=False, img_side=(256,256), weight_thres=0.05, select_all=0.85):
+    def __init__(self, backbone, hyperpixel_ids, benchmark, device, cam, use_xavier=False, img_side=(256,256), weight_thres=0.05, select_all=0.85, training=True):
         r"""Constructor for SCOT framework"""
         super(SCOT_CAM, self).__init__()
 
@@ -72,6 +72,7 @@ class SCOT_CAM(nn.Module):
         self.upsample_size = [int(img_side[0] / 4), int(img_side[1] / 4)]
 
         self.select_all = select_all
+        self.training = training
 
         # TODO, remove it later
         # self.update_rfsz = 11
@@ -83,8 +84,11 @@ class SCOT_CAM(nn.Module):
 
         # update the hyperpixel_ids by checking the weights
 
-        prob = torch.rand(1).item()
-        
+        if self.training:
+            prob = torch.rand(1).item()
+        else:
+            prob = -100
+            
         if prob > self.select_all:
             n_layers = {"resnet50": 17, "resnet101": 34, "fcn101": 34}
             self.hyperpixel_ids = list(range(n_layers[backbone]))

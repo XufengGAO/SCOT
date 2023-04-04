@@ -49,7 +49,7 @@ def convert_weight_map(weight):
 
     return pad_weight
 
-def draw_class_pck(sel_buffer, class_pck_path, epoch, step):
+def draw_class_pck(sel_buffer, class_pck_path, epoch=0, step=0):
 
     mean_sel_buffer = {}
     for (key, value) in sel_buffer.items():

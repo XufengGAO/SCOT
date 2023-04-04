@@ -13,23 +13,30 @@ import torch
 class Logger:
     r"""Writes results of training/testing"""
     @classmethod
-    def initialize(cls, args):
+    def initialize(cls, args, training=True):
         logtime = datetime.datetime.now().__format__('_%m%d_%H%M%S')
-        if args.logpath == "":
-            logpath = "%.e_%s_%s_%s"%(args.lr, args.loss_stage, args.supervision, args.optimizer)
-            
-            if args.optimizer == "sgd":
-                logpath = logpath + "_m%.2f"%(args.momentum)
+        if training:
+            if args.logpath == "":
+                logpath = "%.e_%s_%s_%s"%(args.lr, args.loss_stage, args.supervision, args.optimizer)
                 
-            # if args.selfsup in ['dino', 'denseCL']:
-            logpath = logpath + "_%s_%s"%(args.selfsup, args.backbone)
+                if args.optimizer == "sgd":
+                    logpath = logpath + "_m%.2f"%(args.momentum)
+                    
+                # if args.selfsup in ['dino', 'denseCL']:
+                logpath = logpath + "_%s_%s"%(args.selfsup, args.backbone)
 
-            cls.logpath = os.path.join('logs', logpath + '.log')
+                cls.logpath = os.path.join('logs', logpath + '.log')
+                os.makedirs(cls.logpath, exist_ok=True)
+                filemode = 'w'
+            else:
+                cls.logpath = args.logpath
+                filemode = 'a'
+        else:
+            logtime = datetime.datetime.now().__format__('_%m%d_%H%M%S')
+            logpath = args.logpath
+            cls.logpath = os.path.join('logs', logpath + logtime + '.log')
             os.makedirs(cls.logpath, exist_ok=True)
             filemode = 'w'
-        else:
-            cls.logpath = args.logpath
-            filemode = 'a'
         
         cls.benchmark = args.benchmark
 
