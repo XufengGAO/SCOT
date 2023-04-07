@@ -83,7 +83,7 @@ def predict_kps(src_box, trg_box, src_kps, n_pts, confidence_ts):
     r"""Transfer keypoints by nearest-neighbour assignment"""
 
     # TODO: """Mutual nearest neighbor filtering (Rocco et al. NeurIPS'18)"""
-    # confidence_ts = mutual_nn_filter(confidence_ts) # refined correleation matrix
+    confidence_ts = mutual_nn_filter(confidence_ts) # refined correleation matrix
 
     prd_kps = []
     max_pts = 40
@@ -140,7 +140,8 @@ def neighbours(box, kps):
 
 def predict_test_kps(src_box, trg_box, src_kps, confidence_ts):
     r"""Transfer keypoints by nearest-neighbour assignment"""
-
+    # confidence_ts = mutual_nn_filter(confidence_ts.unsqueeze(0)) # refined correleation matrix
+    # confidence_ts = confidence_ts.squeeze(0)
     # 1. Prepare geometries & argmax target indices
     _, trg_argmax_idx = torch.max(confidence_ts, dim=1)
     src_geomet = src_box[:, :2].unsqueeze(0).repeat(len(src_kps.t()), 1, 1)

@@ -132,7 +132,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
         idx = loss_dict[args.loss_stage]
 
         loss = strategy.compute_loss(model_outputs[idx], eval_result_list[idx], batch, feat_size[0])
-        # loss = torch.tensor([0]).to(device)
+
         if training:
             loss.backward()
             if args.use_grad_clip:
@@ -184,7 +184,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
                     },
                 )
 
-        if training and args.use_wandb and (step % 250 == 0):
+        if training and args.use_wandb and (step % 100 == 0):
             # 1. Draw weight map
             weight_map_path = os.path.join(Logger.logpath, "weight_map")
             os.makedirs(weight_map_path, exist_ok=True)
@@ -198,29 +198,29 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
             # plt.close(fig)
 
             # 2. Draw matches
-            # min_pck, min_pck_idx = torch.tensor(eval_result_list[2]["pck"]).min(dim=0)
-            # src_img = dataloader.dataset.get_image(batch["src_imname"][min_pck_idx])
-            # trg_img = dataloader.dataset.get_image(batch["trg_imname"][min_pck_idx])
-            # draw_match_path = os.path.join(Logger.logpath, "draw_match")
-            # os.makedirs(draw_match_path, exist_ok=True)
-            # match_pth = utils.draw_matches_on_image(
-            #     epoch,
-            #     step,
-            #     min_pck_idx.item(),
-            #     min_pck,
-            #     src_img,
-            #     trg_img,
-            #     batch,
-            #     pred_trg_kps=prd_kps_list[2][min_pck_idx],
-            #     origin=True,
-            #     color_ids=eval_result_list[2]["pck_ids"][min_pck_idx],
-            #     draw_match_path=draw_match_path,
-            # )
+            min_pck, min_pck_idx = torch.tensor(eval_result_list[2]["pck"]).min(dim=0)
+            src_img = dataloader.dataset.get_image(batch["src_imname"][min_pck_idx])
+            trg_img = dataloader.dataset.get_image(batch["trg_imname"][min_pck_idx])
+            draw_match_path = os.path.join(Logger.logpath, "draw_match")
+            os.makedirs(draw_match_path, exist_ok=True)
+            match_pth = utils.draw_matches_on_image(
+                epoch,
+                step,
+                min_pck_idx.item(),
+                min_pck,
+                src_img,
+                trg_img,
+                batch,
+                pred_trg_kps=prd_kps_list[2][min_pck_idx],
+                origin=True,
+                color_ids=eval_result_list[2]["pck_ids"][min_pck_idx],
+                draw_match_path=draw_match_path,
+            )
             if args.use_wandb:
                 wandb.log(
                     {
                         "weight_map": wandb.Image(Image.open(weight_pth).convert("RGB")),
-                        # "match_map": wandb.Image(Image.open(match_pth).convert("RGB"))
+                        "match_map": wandb.Image(Image.open(match_pth).convert("RGB"))
                     }
                 )
                 
@@ -239,7 +239,6 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
             )
 
     # log epoch loss, epoch pck
-
     average_meter.write_result("Training" if training else "Validation", epoch)
 
     avg_loss = utils.mean(average_meter.loss_buffer)
@@ -254,7 +253,6 @@ def test(model, dataloader, args):
 
     model.eval()
     average_meter = AverageMeter(dataloader.dataset.benchmark, dataloader.dataset.cls)
-    zero_pcks = []
     for step, batch in enumerate(dataloader):
         batch['src_img'] = batch['src_img'].to(device)
         batch['trg_img'] = batch['trg_img'].to(device)
@@ -283,15 +281,16 @@ def test(model, dataloader, args):
 
         prd_kps = geometry.predict_test_kps(src_box, trg_box, batch['src_kps'][0], votes_geo[0])
         pair_pck = average_meter.eval_pck(prd_kps, batch, args.alpha)
-        
+
         if pair_pck==0:
-            zero_pcks.append("%s_%s"%(batch['src_imname'], batch['trg_imname']))
-            print("%s_%s"%(batch['src_imname'], batch['trg_imname']))
+            Logger.info("zero_pck: %s_%s"%(batch['src_imname'], batch['trg_imname']))
 
     avg_pck =  average_meter.log_pck()
     return avg_pck
 
 if __name__ == "__main__":
+    
+    torch.cuda.empty_cache()
     # Arguments parsing
     # fmt: off
     parser = argparse.ArgumentParser(description="SCOT Training Script")
@@ -449,7 +448,7 @@ if __name__ == "__main__":
         val_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "val", args.cam, img_side=(200,300), use_resize=True, use_batch=True)
         val_dl = DataLoader(dataset=val_ds, batch_size=args.batch_size, num_workers=num_workers, pin_memory=pin_memory)
     
-    test_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "val", args.cam, img_side=(200,300), use_resize=True, use_batch=False)
+    test_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "test", args.cam, img_side=(200,300), use_resize=True, use_batch=False)
     test_dl = DataLoader(dataset=test_ds, batch_size=1, num_workers=num_workers, pin_memory=pin_memory)
 
     scheduler = None
@@ -468,33 +467,33 @@ if __name__ == "__main__":
     train_started = time.time()
     for epoch in range(args.start_epoch, args.epochs):
 
-#         # training
-#         trn_loss, trn_pck = train(epoch, model, trn_dl, strategy, optimizer, training=True, args=args, scheduler=scheduler)
-#         log_benchmark["trn_loss"] = trn_loss
-#         log_benchmark["trn_pck_sim"] = trn_pck['sim']
-#         log_benchmark["trn_pck_votes"] = trn_pck['votes']
-#         log_benchmark["trn_pck_votes_geo"] = trn_pck['votes_geo']
+        # training
+        trn_loss, trn_pck = train(epoch, model, trn_dl, strategy, optimizer, training=True, args=args, scheduler=scheduler)
+        log_benchmark["trn_loss"] = trn_loss
+        log_benchmark["trn_pck_sim"] = trn_pck['sim']
+        log_benchmark["trn_pck_votes"] = trn_pck['votes']
+        log_benchmark["trn_pck_votes_geo"] = trn_pck['votes_geo']
         
-#         # validation
+         # validation
         if args.split != "val":
             with torch.no_grad():
-                val_loss, val_pck = train(epoch, model, test_dl, strategy, optimizer, training=False, args=args)
+                val_loss, val_pck = train(epoch, model, val_dl, strategy, optimizer, training=False, args=args)
                 log_benchmark["val_loss"] = val_loss
                 log_benchmark["val_pck_sim"] = val_pck['sim']
                 log_benchmark["val_pck_votes"] = val_pck['votes']
                 log_benchmark["val_pck_votes_geo"] = val_pck['votes_geo']
 
-#         # save the best model
-#         if args.split in ['old_trn', 'trn']:
-#             model_pck = val_pck
-#         else:
-#             model_pck = trn_pck
-#         if (epoch%5)==0:
-#             Logger.save_epoch(model, epoch, model_pck["votes_geo"])
-#         if model_pck["votes_geo"] > best_val_pck:
-#             old_best_val_pck = best_val_pck
-#             best_val_pck = model_pck["votes_geo"]
-#             Logger.save_model(model, epoch, best_val_pck, old_best_val_pck)
+        # save the best model
+        if args.split in ['old_trn', 'trn']:
+            model_pck = val_pck
+        else:
+            model_pck = trn_pck
+        if (epoch%5)==0:
+            Logger.save_epoch(model, epoch, model_pck["votes_geo"])
+        if model_pck["votes_geo"] > best_val_pck:
+            old_best_val_pck = best_val_pck
+            best_val_pck = model_pck["votes_geo"]
+            Logger.save_model(model, epoch, best_val_pck, old_best_val_pck)
 
         # testing
         with torch.no_grad():

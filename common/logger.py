@@ -71,12 +71,12 @@ class Logger:
     @classmethod
     def save_epoch(cls, model, epoch, val_pck):
         torch.save(model.state_dict(), os.path.join(cls.logpath, 'eooch_%d.pt'%(epoch)))
-        cls.info('Epoch Model saved @%d w/ val. PCK: %5.2f on [%s]\n' % (epoch, val_pck, os.path.join(cls.logpath, 'eooch_%d.pt'%(epoch))))
+        cls.info('Epoch Model saved @%d w/ val. PCK: %5.4f on [%s]\n' % (epoch, val_pck, os.path.join(cls.logpath, 'eooch_%d.pt'%(epoch))))
     
     @classmethod
     def save_model(cls, model, epoch, val_pck, old_val_pck):
         torch.save(model.state_dict(), os.path.join(cls.logpath, 'best_model.pt'))
-        cls.info('Best Model saved @%d w/ val. PCK: %5.2f -> %5.2f on [%s]\n' % (epoch, old_val_pck, val_pck, os.path.join(cls.logpath, 'best_model.pt')))
+        cls.info('Best Model saved @%d w/ val. PCK: %5.4f -> %5.4f on [%s]\n' % (epoch, old_val_pck, val_pck, os.path.join(cls.logpath, 'best_model.pt')))
 
     @classmethod
     def visualize_selection(cls, catwise_sel):

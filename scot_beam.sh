@@ -3,7 +3,7 @@
 set -x
 
 benchmark="pfpascal"
-backbone="resnet50"
+backbone="resnet101"
 # -m torch.utils.bottleneck
 python train.py \
     --benchmark $benchmark \
@@ -14,20 +14,20 @@ python train.py \
     --alpha 0.1 \
     --lr 0.005 \
     --momentum 0.9 \
-    --epochs 1 \
-    --batch_size 1 \
+    --epochs 100 \
+    --batch_size 10 \
     --optimizer 'sgd' \
     --exp1 1.0 \
     --exp2 0.5 \
     --classmap 1 \
-    --use_wandb False \
+    --use_wandb True \
     --use_xavier False \
     --use_scheduler False \
     --use_grad_clip False \
     --loss_stage "votes" \
-    --split "trn" \
-    --use_pretrained True \
-    --pretrained_path "/scratch/students/2023-spring-sp-xugao/SCOT/backbone/ckp_r50.pt"
+    --split "trn" 
+    # --use_pretrained True \
+    # --pretrained_path "/scratch/students/2023-spring-sp-xugao/SCOT/backbone/ckp_r50.pt"
     # #     # --selfsup "dino" 
     # --run_id "uau60b8q" \
     # --logpath "logs/_0402_080338.log" \

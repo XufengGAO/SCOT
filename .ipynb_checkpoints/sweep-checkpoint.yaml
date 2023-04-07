@@ -7,7 +7,7 @@ parameters:
   benchmark:
     value: 'pfpascal'
   backbone:
-    value: 'resnet50'
+    value: 'resnet101'
   # use_pretrained:
   #   value: True
   # pretrained_path: 
@@ -16,17 +16,18 @@ parameters:
   #   value: "5h6kghje"
   # start_epoch:
   #   value: 18
+  alpha:
+    value: 0.1
   weight_thres:
     value: 0.10
   select_all:
     value: 0.90
   lr:
-    values: [0.1, 0.01, 0.001]
-# wandb agent xugao/SCOT/juvkwlfw
+    values: [0.01, 0.005, 0.003, 0.001]
   epochs:
     value: 80
   batch_size:
-    value: 16
+    value: 10
   optimizer:
     value: 'sgd'
   momentum:
@@ -52,12 +53,12 @@ parameters:
     value: False
   split:
     value: "trn"
-  selfsup:
-    value: "denseCL" 
+  # selfsup:
+  #   value: "denseCL" 
   loss_stage:
     values: ["votes"]
   supervision:
-    values: ["strong", "flow"]
+    values: ["strong"]
     # , "votes", "votes_geo" "sim", "votes"， 
 
 
