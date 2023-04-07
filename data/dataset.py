@@ -122,7 +122,7 @@ class CorrespondenceDataset(Dataset):
         sample['src_imsize'] = torch.tensor(src_pil.size).flip(dims=(0,)) # HxW
         sample['trg_imsize'] = torch.tensor(trg_pil.size).flip(dims=(0,))
 
-        if self.split in ['val', 'test']:
+        if self.split in ['test']:
             sample['src_img'], sample['src_ratio']  = self.resize(sample['src_img'])
             sample['trg_img'], sample['trg_ratio']  = self.resize(sample['trg_img'])
         else:
@@ -182,9 +182,10 @@ class CorrespondenceDataset(Dataset):
         # print('range_ts', nearest_idx)
         return nearest_idx
 
-    def resize(img, side_thres=300):
+    def resize(self, img, side_thres=300):
         r"""Resize given image with imsize: (1, 3, H, W)"""
         imsize = torch.tensor(img.size()).float()
+        print(img.size())
         side_max = torch.max(imsize)
         inter_ratio = 1.0
  

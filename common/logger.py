@@ -186,10 +186,10 @@ class AverageMeter:
         msg += '[@Epoch %02d] ' % epoch if epoch > -1 else ''
 
         if len(self.loss_buffer) > 0:
-            msg += 'Loss: %5.2f  ' % (sum(self.loss_buffer) / len(self.loss_buffer))
+            msg += 'Loss: %5.4f  ' % (sum(self.loss_buffer) / len(self.loss_buffer))
 
         for key in self.buffer_keys:
-            msg += '%s in buf: sim=%4.2f, votes=%4.2f, votes_geo=%4.2f' % (key.upper(), 
+            msg += '%s in buf: sim=%4.4f, votes=%4.4f, votes_geo=%4.4f' % (key.upper(), 
                                                                                sum(self.buffer['sim'][key]) / len(self.buffer['sim'][key]),
                                                                                sum(self.buffer['votes'][key]) / len(self.buffer['votes'][key]),
                                                                                sum(self.buffer['votes_geo'][key]) / len(self.buffer['votes_geo'][key]),)
@@ -201,11 +201,11 @@ class AverageMeter:
         msg = '[Epoch: %02d] ' % epoch if epoch > -1 else ''
         msg += '[Batch: %04d/%04d] ' % (batch_idx+1, datalen)
         if len(self.loss_buffer) > 0:
-            msg += 'Loss (last sample): %6.2f  ' % self.loss_buffer[-1]
+            msg += 'Loss (last sample): %6.4f  ' % self.loss_buffer[-1]
             msg += 'Avg Loss in buf: %6.5f  ' % (sum(self.loss_buffer) / len(self.loss_buffer))
 
         for key in self.buffer_keys:
-            msg += 'Avg %s in buf: sim=%4.2f, votes=%4.2f, votes_geo=%4.2f' % (key.upper(), 
+            msg += 'Avg %s in buf: sim=%4.4f, votes=%4.4f, votes_geo=%4.4f' % (key.upper(), 
                                                                                sum(self.buffer['sim'][key]) / len(self.buffer['sim'][key]),
                                                                                sum(self.buffer['votes'][key]) / len(self.buffer['votes'][key]),
                                                                                sum(self.buffer['votes_geo'][key]) / len(self.buffer['votes_geo'][key]),)

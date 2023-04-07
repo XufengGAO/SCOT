@@ -194,27 +194,28 @@ def rhm(src_hyperpixels, trg_hyperpixels, hsfilter, sim, exp1, exp2, eps, ncells
     # print("votes:", votes.size(), votes.requires_grad, torch.max(votes), torch.min(votes))
     # print("imsize", src_imsize, trg_imsize, src_hpgeomt.size(), ncells)
     
-    geometric_scores = []
+    with torch.no_grad():
+        geometric_scores = []
 
-    nbins_x, nbins_y, hs_cellsize = build_hspace(src_imsize, trg_imsize, ncells)
-    bin_ids = hspace_bin_ids(src_imsize, src_hpgeomt, trg_hpgeomt, hs_cellsize, nbins_x)
-    hspace = src_hpgeomt.new_zeros((votes.size()[1], nbins_y * nbins_x))
+        nbins_x, nbins_y, hs_cellsize = build_hspace(src_imsize, trg_imsize, ncells)
+        bin_ids = hspace_bin_ids(src_imsize, src_hpgeomt, trg_hpgeomt, hs_cellsize, nbins_x)
+        hspace = src_hpgeomt.new_zeros((votes.size()[1], nbins_y * nbins_x))
 
-    # Proceed voting
-    hbin_ids = bin_ids.add(torch.arange(0, votes.size()[1]).to(src_hpgeomt.device).
-                        mul(hspace.size(1)).unsqueeze(1).expand_as(bin_ids))
-    for vote in votes:
-        new_hspace = hspace.view(-1).index_add(0, hbin_ids.view(-1), vote.view(-1)).view_as(hspace)
-        new_hspace = torch.sum(new_hspace, dim=0)
+        # Proceed voting
+        hbin_ids = bin_ids.add(torch.arange(0, votes.size()[1]).to(src_hpgeomt.device).
+                            mul(hspace.size(1)).unsqueeze(1).expand_as(bin_ids))
+        for vote in votes:
+            new_hspace = hspace.view(-1).index_add(0, hbin_ids.view(-1), vote.view(-1)).view_as(hspace)
+            new_hspace = torch.sum(new_hspace, dim=0)
 
-        # Aggregate the voting results
-        new_hspace = F.conv2d(new_hspace.view(1, 1, nbins_y, nbins_x),
-                        hsfilter.unsqueeze(0).unsqueeze(0), padding=3).view(-1)
+            # Aggregate the voting results
+            new_hspace = F.conv2d(new_hspace.view(1, 1, nbins_y, nbins_x),
+                            hsfilter.unsqueeze(0).unsqueeze(0), padding=3).view(-1)
 
-        geometric_scores.append((vote * torch.index_select(new_hspace, dim=0, index=bin_ids.view(-1)).view_as(vote)).unsqueeze(0))
+            geometric_scores.append((vote * torch.index_select(new_hspace, dim=0, index=bin_ids.view(-1)).view_as(vote)).unsqueeze(0))
 
-    geometric_scores = torch.cat(geometric_scores, dim=0)
-    # print("geometric scores", geometric_scores.size()) # 4x4096x4096
+        geometric_scores = torch.cat(geometric_scores, dim=0)
+        # print("geometric scores", geometric_scores.size()) # 4x4096x4096
 
     return sim, votes, geometric_scores
 

@@ -150,8 +150,8 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
         )
         
         # log batch loss, batch pck    
-        # if training and (step % 60 == 0):
-        #     average_meter.write_process(step, len(dataloader), epoch)
+        if training and (step % 60 == 0):
+            average_meter.write_process(step, len(dataloader), epoch)
 
         # log running step loss 
         if training and args.use_wandb and (step % 100 == 0):
@@ -253,7 +253,7 @@ def test(model, dataloader, args):
     r"""Code for test SCOT"""
 
     model.eval()
-    average_meter = AverageMeter(dataloader.dataset.benchmark, device)
+    average_meter = AverageMeter(dataloader.dataset.benchmark, dataloader.dataset.cls)
 
     for step, batch in enumerate(dataloader):
         batch['src_img'] = batch['src_img'].to(device)
@@ -409,7 +409,7 @@ if __name__ == "__main__":
         # if args.selfsup in ['dino', 'denseCL']:
         wandb_name = wandb_name + "_%s_%s"%(args.selfsup, args.backbone)
 
-        run = wandb.init(project="SCOT", config=args, id=args.run_id, resume="allow", name=wandb_name)
+        run = wandb.init(project="new SCOT", config=args, id=args.run_id, resume="allow", name=wandb_name)
         # wandb.watch(model.learner, log="all", log_freq=100)
         wandb.define_metric("iters")
         wandb.define_metric("grad_ratio", step_metric="iters")
@@ -443,7 +443,8 @@ if __name__ == "__main__":
     
     if args.split != "val":
         val_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "val", args.cam)
-        val_dl = DataLoader(dataset=val_ds, batch_size=1, num_workers=num_workers, pin_memory=pin_memory)
+        val_dl = DataLoader(dataset=val_ds, batch_size=args.batch_size, num_workers=num_workers, pin_memory=pin_memory)
+        
     
     test_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "test", args.cam)
     test_dl = DataLoader(dataset=test_ds, batch_size=1, num_workers=num_workers, pin_memory=pin_memory)
@@ -465,32 +466,32 @@ if __name__ == "__main__":
     for epoch in range(args.start_epoch, args.epochs+1):
 
         # training
-        trn_loss, trn_pck = train(epoch, model, trn_dl, strategy, optimizer, training=True, args=args, scheduler=scheduler)
-        log_benchmark["trn_loss"] = trn_loss
-        log_benchmark["trn_pck_sim"] = trn_pck['sim']
-        log_benchmark["trn_pck_votes"] = trn_pck['votes']
-        log_benchmark["trn_pck_votes_geo"] = trn_pck['votes_geo']
+        # trn_loss, trn_pck = train(epoch, model, trn_dl, strategy, optimizer, training=True, args=args, scheduler=scheduler)
+        # log_benchmark["trn_loss"] = trn_loss
+        # log_benchmark["trn_pck_sim"] = trn_pck['sim']
+        # log_benchmark["trn_pck_votes"] = trn_pck['votes']
+        # log_benchmark["trn_pck_votes_geo"] = trn_pck['votes_geo']
         
         # validation
-        if args.split != "val":
-            with torch.no_grad():
-                val_loss, val_pck = train(epoch, model, val_dl, strategy, optimizer, training=False, args=args)
-                log_benchmark["val_loss"] = val_loss
-                log_benchmark["val_pck_sim"] = val_pck['sim']
-                log_benchmark["val_pck_votes"] = val_pck['votes']
-                log_benchmark["val_pck_votes_geo"] = val_pck['votes_geo']
+#         if args.split != "val":
+#             with torch.no_grad():
+#                 val_loss, val_pck = train(epoch, model, val_dl, strategy, optimizer, training=False, args=args)
+#                 log_benchmark["val_loss"] = val_loss
+#                 log_benchmark["val_pck_sim"] = val_pck['sim']
+#                 log_benchmark["val_pck_votes"] = val_pck['votes']
+#                 log_benchmark["val_pck_votes_geo"] = val_pck['votes_geo']
 
-        # save the best model
-        if args.split in ['old_trn', 'trn']:
-            model_pck = val_pck
-        else:
-            model_pck = trn_pck
-        if (epoch%5)==0:
-            Logger.save_epoch(model, epoch, model_pck["votes_geo"])
-        if model_pck["votes_geo"] > best_val_pck:
-            old_best_val_pck = best_val_pck
-            best_val_pck = model_pck["votes_geo"]
-            Logger.save_model(model, epoch, best_val_pck, old_best_val_pck)
+#         # save the best model
+#         if args.split in ['old_trn', 'trn']:
+#             model_pck = val_pck
+#         else:
+#             model_pck = trn_pck
+#         if (epoch%5)==0:
+#             Logger.save_epoch(model, epoch, model_pck["votes_geo"])
+#         if model_pck["votes_geo"] > best_val_pck:
+#             old_best_val_pck = best_val_pck
+#             best_val_pck = model_pck["votes_geo"]
+#             Logger.save_model(model, epoch, best_val_pck, old_best_val_pck)
 
         # testing
         with torch.no_grad():
