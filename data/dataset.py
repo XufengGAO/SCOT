@@ -122,9 +122,10 @@ class CorrespondenceDataset(Dataset):
         sample['src_imsize'] = torch.tensor(src_pil.size).flip(dims=(0,)) # HxW
         sample['trg_imsize'] = torch.tensor(trg_pil.size).flip(dims=(0,))
 
+
         if self.split in ['test']:
-            sample['src_img'], sample['src_ratio']  = self.resize(sample['src_img'])
-            sample['trg_img'], sample['trg_ratio']  = self.resize(sample['trg_img'])
+            sample['src_img'], sample['src_ratio']  = self.resize(sample['src_img'].unsqueeze(0))
+            sample['trg_img'], sample['trg_ratio']  = self.resize(sample['trg_img'].unsqueeze(0))
         else:
             sample['src_ratio'] = (self.imside / sample['src_imsize']) # ratio, (H,W)
             sample['trg_ratio'] = (self.imside / sample['trg_imsize'])
@@ -185,18 +186,17 @@ class CorrespondenceDataset(Dataset):
     def resize(self, img, side_thres=300):
         r"""Resize given image with imsize: (1, 3, H, W)"""
         imsize = torch.tensor(img.size()).float()
-        print(img.size())
         side_max = torch.max(imsize)
         inter_ratio = 1.0
- 
+  
         inter_ratio = side_thres / side_max # size reduced to 300
-        img = F.interpolate(img,
-                            size=(int(imsize[1] * inter_ratio), int(imsize[2] * inter_ratio)),
+        new_img = F.interpolate(img,
+                            size=(int(imsize[2] * inter_ratio), int(imsize[3] * inter_ratio)),
                             mode='bilinear',
                             align_corners=False)
             # kps *= inter_ratio
             # , kps, inter_ratio
-        return img, torch.stack((inter_ratio, inter_ratio))
+        return new_img.squeeze(0), torch.stack((inter_ratio, inter_ratio))
 
 
 def find_knn(db_vectors, qr_vectors):

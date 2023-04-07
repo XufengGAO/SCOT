@@ -52,10 +52,12 @@ def perform_sinkhorn2(C,epsilon,mu,nu,a=[],warm=False,niter=1,tol=10e-9):
         a = a.to(device)
 
     K = torch.exp(-C/epsilon)
+    # print(K.size(), nu.size(), a.size())
 
     Err = torch.zeros((niter,2)).to(device)
     for i in range(niter):
         b = nu/torch.mm(K.t(), a)
+
         if i%2==0:
             Err[i,0] = torch.norm(a*(torch.mm(K, b)) - mu, p=1)
             if i>0 and (Err[i,0]) < tol:
@@ -130,7 +132,7 @@ def appearance_similarityOT(src_feats, trg_feats, exp1=1.0, exp2=1.0, eps=0.05, 
 
         while True: # see Algorithm 1
             # PI is optimal transport plan or transport matrix.
-            PI,_,_,_ = perform_sinkhorn2(cost, epsilon, mu, nu) # 4x4096x4096
+            PI,_,_,_ = perform_sinkhorn2(cost, epsilon, mu.unsqueeze(-1), nu.unsqueeze(-1)) # 4x4096x4096
             
             #PI = sinkhorn_stabilized(mu, nu, cost, reg=epsilon, numItermax=50, method='sinkhorn_stabilized', cuda=True)
             if not torch.isnan(PI).any():
