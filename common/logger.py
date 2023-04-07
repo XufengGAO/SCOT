@@ -213,7 +213,6 @@ class AverageMeter:
 
         Logger.info(msg)
 
-
 def correct_kps(trg_kps, prd_kps, pckthres, alpha=0.1):
     r"""Compute the number of correctly transferred key-points"""
     # print(trg_kps.is_cuda, prd_kps.is_cuda, pckthres.is_cuda)

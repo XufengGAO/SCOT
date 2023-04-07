@@ -11,7 +11,7 @@ from model.base.geometry import Geometry
 
 class CorrespondenceDataset(Dataset):
     r"""Parent class of PFPascal, PFWillow, Caltech, and SPair""" # imside = (H, W)
-    def __init__(self, benchmark, datapath, thres, device, split, imside=(256,256), use_resize=False):
+    def __init__(self, benchmark, datapath, thres, device, split, imside=(256,256), use_resize=False, use_batch=False):
         r"""CorrespondenceDataset constructor"""
         super(CorrespondenceDataset, self).__init__()
 
@@ -61,18 +61,12 @@ class CorrespondenceDataset(Dataset):
         self.thres = self.metadata[benchmark][4] if thres == 'auto' else thres
 
         self.use_resize = use_resize
-        if not self.use_resize:
-            self.transform  = transforms.Compose([transforms.Resize(size=imside),
-                                                transforms.ToTensor(),
-                                                transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                                                    std=[0.229, 0.224, 0.225])
-                                                ])
-        else:
-            self.transform = transforms.Compose([transforms.ToTensor(),
-                                                transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                                                    std=[0.229, 0.224, 0.225])
-                                                ])
+        self.use_batch = use_batch
 
+        self.transform = transforms.Compose([transforms.ToTensor(),
+                                            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                                                std=[0.229, 0.224, 0.225])
+                                            ])
         self.device = device
         self.split = split
 
@@ -90,8 +84,8 @@ class CorrespondenceDataset(Dataset):
         else:
             self.max_pts = 40
         
-        self.imside = torch.tensor(imside).float() # HxW
-        self.range_ts = torch.arange(self.max_pts)
+        assert isinstance(imside, tuple) or isinstance(imside, int), print("The type of imsize should be tuple or int")
+        self.imside = imside # rescale image
         self.benchmark = benchmark
 
     def __len__(self):
@@ -114,29 +108,22 @@ class CorrespondenceDataset(Dataset):
         src_pil = self.get_image(sample['src_imname'])
         trg_pil = self.get_image(sample['trg_imname'])
 
-        # Image as tensor
-        sample['src_img'] = self.transform(src_pil) # totensor, HxW
+        # Image (original size) as tensor
+        sample['src_img'] = self.transform(src_pil) # totensor, CxHxW
         sample['trg_img'] = self.transform(trg_pil)
 
-        sample['src_imsize'] = torch.tensor(src_pil.size).flip(dims=(0,)) # HxW
-        sample['trg_imsize'] = torch.tensor(trg_pil.size).flip(dims=(0,))
+        # Key-points (original) as tensor
+        sample['src_kps'], sample['n_pts'] = self.get_points(self.src_kps, idx)
+        sample['trg_kps'], _ = self.get_points(self.trg_kps, idx)
 
-
-        if self.use_resize:
-            sample['src_img'], sample['src_ratio']  = self.resize(sample['src_img'].unsqueeze(0))
-            sample['trg_img'], sample['trg_ratio']  = self.resize(sample['trg_img'].unsqueeze(0))
-        else:
-            sample['src_ratio'] = (self.imside / sample['src_imsize']) # ratio, (H,W)
-            sample['trg_ratio'] = (self.imside / sample['trg_imsize'])
-
-        # Key-points (re-scaled)
-        sample['src_kps'], sample['n_pts'] = self.get_points(self.src_kps, idx, sample['src_ratio'])
-        sample['trg_kps'], _ = self.get_points(self.trg_kps, idx, sample['trg_ratio'])
-            
-        # print(sample['src_imsize'], sample['trg_imsize'] , sample['src_ratio'], sample['trg_ratio'])
- 
         # The number of pairs in training split
         sample['datalen'] = len(self.train_data)
+
+        # for key, value in sample.items():
+        #     if key in ['src_img', 'trg_img']:
+        #         print(key, value.size())
+        #     else:
+        #         print(key, value)
 
         return sample
 
@@ -144,58 +131,41 @@ class CorrespondenceDataset(Dataset):
         r"""Return image tensor"""
         img_name = os.path.join(self.img_path, img_names)
         image = Image.open(img_name).convert('RGB') # WxH
+
         return image
     
-    def get_pckthres(self, batch):
-        r"""Computes PCK threshold"""
+    def get_pckthres(self, sample):
+        r"""Compute PCK threshold"""
         if self.thres == 'bbox':
-            bbox = batch['trg_bbox'].clone()
-            bbox_w = (bbox[2] - bbox[0])
-            bbox_h = (bbox[3] - bbox[1])
-            pckthres = torch.max(bbox_w, bbox_h)
+            trg_bbox = sample['trg_bbox']
+            return torch.max(trg_bbox[2]-trg_bbox[0], trg_bbox[3]-trg_bbox[1])
         elif self.thres == 'img':
-            imsize_t = batch['trg_img'].size() # CxHxW, current image size
-            pckthres = torch.tensor(max(imsize_t[1], imsize_t[2]))
+            return torch.tensor(max(sample['trg_img'].size(1), sample['trg_img'].size(2)))
         else:
-            raise Exception('Invalid pck threshold type: %s' % self.thres)
-        return pckthres.float()
+            raise Exception('Invalid pck evaluation level: %s' % self.thres)
 
-    def get_points(self, pts_list, idx, inter_ratio):
+    def get_points(self, pts, idx):
         r"""Returns key-points of an image"""
-        xy, n_pts = pts_list[idx].size()
-        # print(pts_list[idx].size())
-        pad_pts = torch.zeros((xy, self.max_pts - n_pts))-100 # pad (-100, -100)
-        # print((self.imside[1] / org_imsize[1]), (self.imside[0] / org_imsize[0]))
-        x_crds = pts_list[idx][0] * inter_ratio[1] # w_kps * (300/W)
-        y_crds = pts_list[idx][1] * inter_ratio[0] # h_kps * (225/H)
-        kps = torch.cat([torch.stack([x_crds, y_crds]), pad_pts], dim=1)
+        return pts[idx], pts[idx].size()[1]
 
-        # return kps.to(self.device), torch.tensor(n_pts).to(self.device)
-        return kps, torch.tensor(n_pts)
-    
-    def match_idx(self, kps, n_pts):
-        r"""Samples the nearst feature (receptive field) indices"""
-
-        nearest_idx = find_knn(Geometry.rf_center, kps.t())
-        
-        nearest_idx -= (self.range_ts >= n_pts).long()
-        # print('range_ts', nearest_idx)
-        return nearest_idx
-
-    def resize(self, img, side_thres=300):
+    def resize(self, img, kps):
         r"""Resize given image with imsize: (1, 3, H, W)"""
         imsize = torch.tensor(img.size()).float()
-        side_max = torch.max(imsize)
-        inter_ratio = 1.0
-  
-        inter_ratio = side_thres / side_max # size reduced to 300
-        new_img = F.interpolate(img,
-                            size=(int(imsize[2] * inter_ratio), int(imsize[3] * inter_ratio)),
+
+        if isinstance(self.imside, tuple):
+            inter_ratio = (self.imside[0]/imsize[2], self.imside[1]/imsize[3])
+        else:
+            side_max = torch.max(imsize)
+            inter_ratio = (self.imside/side_max, self.imside/side_max) # size reduced to new HxW
+
+        img = F.interpolate(img,
+                            size=(int(imsize[2] * inter_ratio[0]), int(imsize[3] * inter_ratio[1])),
                             mode='bilinear',
                             align_corners=False)
-            # kps *= inter_ratio
+        kps[0,:] *= inter_ratio[1]
+        kps[1,:] *= inter_ratio[0]
             # , kps, inter_ratio
-        return new_img.squeeze(0), torch.stack((inter_ratio, inter_ratio))
+        return img.squeeze(0), kps, torch.tensor(inter_ratio).float()
 
 
 def find_knn(db_vectors, qr_vectors):
