@@ -9,7 +9,8 @@ import torch
 import time
 from PIL import Image
 from data import download
-from model import scot_CAM, util, geometry
+from test_data import download as test_download
+from model import scot_CAM, util, geometry, evaluation
 from model.objective import Objective
 from common import supervision as sup
 from common import utils
@@ -41,45 +42,40 @@ def find_knn(db_vectors, qr_vectors):
 
 def match_idx(kpss, n_ptss):
     r"""Samples the nearst feature (receptive field) indices"""
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    nearest_idxs = []
     max_pts = 40
-    range_ts = torch.arange(max_pts).to(device)
-    for kps, n_pts in zip(kpss, n_ptss):
-        nearest_idx = find_knn(Geometry.rf_center, kps.t())
-        nearest_idx -= (range_ts >= n_pts).to(device).long()
-        nearest_idxs.append(nearest_idx.unsqueeze(0))
-    nearest_idxs = torch.cat(nearest_idxs, dim=0)
+    batch = len(kpss)
+    nearest_idxs = torch.zeros((batch, max_pts), dtype=torch.int32).to(device)
+    for idx, (kps, n_pts) in enumerate(zip(kpss, n_ptss)):
+        nearest_idx = find_knn(Geometry.rf_center, kps[:,:n_pts].t())
+        nearest_idxs[idx, :n_pts] = nearest_idx
+        # nearest_idxs.append(nearest_idx.unsqueeze(0))
+    # nearest_idxs = torch.cat(nearest_idxs, dim=0)
 
-    return nearest_idxs.to(device)
+    return nearest_idxs
 
-def train(epoch, model, dataloader, strategy, optimizer, training, args, scheduler=None, testing=False):
+def train(epoch, model, dataloader, strategy, optimizer, training, args, scheduler=None):
     r"""Code for training SCOT"""
-
     if training:
         model.train()
     else:
         model.eval()
 
-    # print(model.backbone.training, model.learner.training)
-
-    average_meter = AverageMeter(dataloader.dataset.benchmark, cls=dataloader.dataset.cls)
+    average_meter = AverageMeter(dataloader.dataset.benchmark, dataloader.dataset.cls)
     total_steps = len(dataloader)
     lrs = []
 
     for step, batch in enumerate(dataloader):
+        optimizer.zero_grad()
         iters = step + epoch * total_steps
         
         src_img, trg_img = strategy.get_image_pair(batch) 
-        src_img = src_img.to(device)
-        trg_img = trg_img.to(device)
-        
+
         if "src_mask" in batch.keys():
-            src_mask = batch["src_mask"].to(device)
-            trg_mask = batch["trg_mask"].to(device)
+            batch["src_mask"] = batch["src_mask"].to(device)
+            batch["trg_mask"] = batch["trg_mask"].to(device)
         else:
-            src_mask = None
-            trg_mask = None
+            batch["src_mask"] = None
+            batch["trg_mask"] = None
 
         sim, votes, votes_geo, src_box, trg_box, feat_size = model(
             src_img,
@@ -89,9 +85,10 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
             args.exp2,
             args.eps,
             args.classmap,
-            src_mask,
-            trg_mask,
+            batch["src_mask"],
+            batch["trg_mask"],
             args.backbone,
+            training
         )
 
         # print(sim.size(), votes.size(), votes_geo.size(), src_box.size(), trg_box.size())
@@ -101,13 +98,12 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
 
         model_outputs = [sim, votes, votes_geo]
         with torch.no_grad():
-
             batch['src_kps'] = batch['src_kps'].to(device)
             batch['n_pts'] = batch['n_pts'].to(device)
             batch['trg_kps'] = batch['trg_kps'].to(device)
-            batch['n_pts'] = batch['n_pts'].to(device)
             batch['pckthres'] = batch['pckthres'].to(device)
             
+            # for cross-entropy loss
             batch['src_kpidx'] = match_idx(batch['src_kps'], batch['n_pts'])
             batch['trg_kpidx'] = match_idx(batch['trg_kps'], batch['n_pts'])
 
@@ -116,6 +112,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
 
             prd_kps_list = []
             eval_result_list = []
+
             for corr in model_outputs:
                 prd_kps = geometry.predict_kps(
                     src_box,
@@ -123,18 +120,13 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
                     batch["src_kps"],
                     batch["n_pts"],
                     strategy.get_correlation(corr),
-                )
+                ) # [2,2,40]
                 prd_kps_list.append(prd_kps)
-                eval_result = Evaluator.evaluate(prd_kps, batch)
+
+                eval_result = Evaluator.evaluate(prd_kps, batch) # return dict results
                 # print(len(eval_result['pck']))
                 eval_result_list.append(eval_result)
         
-        # 3. Evaluate predictions
-        # eval_result = {'easy_match': easy_match,
-        #                'hard_match': hard_match,
-        #                'pck': pck,
-        #                'pck_ids': pck_ids}
-
         assert args.loss_stage in ["sim", "votes", "votes_geo"], "Unrecognized loss stage"
         loss_dict = {"sim":0, "votes":1, "votes_geo":2}
         idx = loss_dict[args.loss_stage]
@@ -142,25 +134,13 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
         loss = strategy.compute_loss(model_outputs[idx], eval_result_list[idx], batch, feat_size[0])
 
         if training:
-            optimizer.zero_grad()
             loss.backward()
-
             if args.use_grad_clip:
                 torch.nn.utils.clip_grad.clip_grad_value_(model.parameters(), args.grad_clip)
-
             optimizer.step()
-
             if args.use_scheduler:
                 lrs.append(utils.get_lr(optimizer))
                 scheduler.step() # update lr batch-by-batch
-
-        # print(model.learner.layerweight.size())
-        # print(eval_result['pck'])
-        # print(batch["pair_class"], batch["n_pts"])
-        # print(prd_kps[0][:,:10])
-        # print(batch['trg_kps'][0][:,:10])
-        # print(eval_result['easy_match'])
-        # print(eval_result['hardmatch'])
 
         # log pck, loss
         average_meter.update(
@@ -169,21 +149,9 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
             loss.item(),
         )
         
-        # print('eval_result_list', type(eval_result_list[0]), type(batch["pair_class"][0]) )
-        # print(eval_result_list)
-        
-        # log batch loss, batch pck
-        
+        # log batch loss, batch pck    
         # if training and (step % 60 == 0):
         #     average_meter.write_process(step, len(dataloader), epoch)
-        
-        # Logger.tbd_writer.add_histogram(
-        #     tag="learner_grad",
-        #     values=model.learner.layerweight.grad.detach().clone().view(-1),
-        #     global_step=step,
-        # )
-
-        # print("pck", eval_result["pck"], torch.tensor(eval_result["pck"]))
 
         # log running step loss 
         if training and args.use_wandb and (step % 100 == 0):
@@ -271,10 +239,8 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
             )
 
     # log epoch loss, epoch pck
-    if testing:
-        average_meter.write_result("Testing", epoch)
-    else:
-        average_meter.write_result("Training" if training else "Validation", epoch)
+
+    average_meter.write_result("Training" if training else "Validation", epoch)
 
     avg_loss = utils.mean(average_meter.loss_buffer)
     avg_pck = {'sim':0, 'votes':0, 'votes_geo':0}
@@ -283,6 +249,43 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
 
     return avg_loss, avg_pck
 
+def test(model, dataloader, args):
+    r"""Code for test SCOT"""
+
+    model.eval()
+    average_meter = AverageMeter(dataloader.dataset.benchmark, device)
+
+    for step, batch in enumerate(dataloader):
+        batch['src_img'] = batch['src_img'].to(device)
+        batch['trg_img'] = batch['trg_img'].to(device)
+        
+        if "src_mask" in batch.keys():
+            src_mask = batch["src_mask"].to(device)
+            trg_mask = batch["trg_mask"].to(device)
+        else:
+            src_mask = None
+            trg_mask = None
+
+        sim, votes, votes_geo, src_box, trg_box, _ = model(
+            batch['src_img'],
+            batch['trg_img'],
+            args.sim,
+            args.exp1,
+            args.exp2,
+            args.eps,
+            args.classmap,
+            src_mask,
+            trg_mask,
+            args.backbone,
+            training=False
+        )
+
+        prd_kps = geometry.predict_test_kps(src_box, trg_box, batch['src_kps'][0], votes_geo[0])
+        average_meter.eval_pck(prd_kps, batch, args.alpha)
+
+    avg_pck =  average_meter.log_pck()
+
+    return avg_pck
 
 if __name__ == "__main__":
     # Arguments parsing
@@ -355,7 +358,6 @@ if __name__ == "__main__":
     hyperpixels = list(range(n_layers[args.backbone]))
 
     # 3. Model intialization
-    img_side = (256, 256)
     model = scot_CAM.SCOT_CAM(
         args.backbone,
         hyperpixels,
@@ -363,7 +365,6 @@ if __name__ == "__main__":
         device,
         args.cam,
         args.use_xavier,
-        img_side=img_side,
         weight_thres=args.weight_thres,
         select_all=args.select_all
     )
@@ -372,8 +373,6 @@ if __name__ == "__main__":
         model.load_state_dict(torch.load(args.pretrained_path, map_location=device))
 
     if args.selfsup in ['dino', 'denseCL']:
-        # print(model.backbone.conv1.weight[1,:,:2,:2])
-        # print(model.backbone.fc.weight[:2,:5])
         pretrained_backbone = torch.load(args.backbone_path, map_location=device)
         backbone_keys = list(model.backbone.state_dict().keys())
             
@@ -385,10 +384,8 @@ if __name__ == "__main__":
             load_keys = list(pretrained_backbone.keys())
         missing_keys = [i for i in backbone_keys if i not in load_keys]
         print(missing_keys)
-        # print(model.backbone.conv1.weight[1,:,:2,:2])
-        # print(model.backbone.fc.weight[:2,:5])
 
-    # 4. Objective and Optimizer
+    # 4. Objective (cross-entropy loss) and Optimizer
     Objective.initialize(target_rate=0.5, alpha=args.alpha)
 
     if args.supervision == "weak":
@@ -398,35 +395,11 @@ if __name__ == "__main__":
     else:
         strategy = sup.EPESupStrategy()
 
-    # param_model = [
-    #     param for name, param in model.named_parameters() if "backbone" not in name
-    # ]
-    # param_backbone = [
-    #     param for name, param in model.named_parameters() if "backbone" in name
-    # ]
-
     assert args.optimizer in ["sgd", "adam"], "Unrecognized model type"
     if args.optimizer == "sgd":
-        optimizer = optim.SGD(
-            model.parameters(),
-            lr=args.lr,
-            # [
-            #     {"params": param_model, "lr": args.lr},
-            #     # {"params": param_backbone, "lr": args.lr_backbone},
-            # ],
-            momentum=args.momentum,
-        )
+        optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
     else:
-        # args.optimizer == "adam":
-        optimizer = optim.AdamW(
-            model.parameters(),
-            lr=args.lr,
-            # [
-            #     {"params": param_model, "lr": args.lr},
-            #     # {"params": param_backbone, "lr": args.lr_backbone},
-            # ],
-            weight_decay=args.weight_decay,
-        )
+        optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     if args.use_wandb:
         wandb_name = "%.e_%s_%s_%s"%(args.lr, args.loss_stage, args.supervision, args.optimizer)
@@ -461,44 +434,28 @@ if __name__ == "__main__":
         wandb.define_metric("test_pck_votes", step_metric="epochs")
         wandb.define_metric("test_pck_votes_geo", step_metric="epochs")
         
-        
-
     # 5. Dataset download & initialization
     num_workers = 16 if torch.cuda.is_available() else 8
-    pin_memory = True
+    pin_memory = True if torch.cuda.is_available() else False
     
-    trn_ds = download.load_dataset(
-        args.benchmark, args.datapath, args.thres, device, args.split, img_side=img_side
-    )
+    trn_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, args.split, args.cam, img_side=(256, 256))
     trn_dl = DataLoader(dataset=trn_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory)
     
     if args.split != "val":
-        val_ds = download.load_dataset(
-            args.benchmark, args.datapath, args.thres, device, "val", img_side=img_side
-        )
-        val_dl = DataLoader(dataset=val_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory)
+        val_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "val", args.cam)
+        val_dl = DataLoader(dataset=val_ds, batch_size=1, num_workers=num_workers, pin_memory=pin_memory)
     
-    test_ds = download.load_dataset(
-        args.benchmark, args.datapath, args.thres, device, "test", img_side=img_side
-    )
-    
-    test_dl = DataLoader(dataset=test_ds, batch_size=args.batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory)
+    test_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "test", args.cam)
+    test_dl = DataLoader(dataset=test_ds, batch_size=1, num_workers=num_workers, pin_memory=pin_memory)
 
-    # 5.5 Scheduler
+    scheduler = None
     if args.use_scheduler:
         assert args.scheduler in ["cycle", "step"], "Unrecognized model type" 
         if args.scheduler == "cycle":
-            scheduler = torch.optim.lr_scheduler.OneCycleLR(
-                optimizer,
-                args.lr,
-                epochs=args.epochs,
-                steps_per_epoch=len(trn_dl),
-            )
-    else:
-        scheduler = None
+            scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, args.lr, epochs=args.epochs, steps_per_epoch=len(trn_dl))
 
     # 6. Evaluator
-    Evaluator.initialize(args.benchmark, args.alpha)
+    Evaluator.initialize(args.alpha)
 
     # 7. Train SCOT
     best_val_pck = float("-inf")
@@ -506,81 +463,45 @@ if __name__ == "__main__":
     print("Training Start")
     train_started = time.time()
     for epoch in range(args.start_epoch, args.epochs+1):
-        trn_loss, trn_pck = train(
-            epoch, model, trn_dl, strategy, optimizer, training=True, args=args, scheduler=scheduler
-        )
+
+        # training
+        trn_loss, trn_pck = train(epoch, model, trn_dl, strategy, optimizer, training=True, args=args, scheduler=scheduler)
         log_benchmark["trn_loss"] = trn_loss
         log_benchmark["trn_pck_sim"] = trn_pck['sim']
         log_benchmark["trn_pck_votes"] = trn_pck['votes']
         log_benchmark["trn_pck_votes_geo"] = trn_pck['votes_geo']
         
+        # validation
         if args.split != "val":
             with torch.no_grad():
-                val_loss, val_pck = train(
-                    epoch, model, val_dl, strategy, optimizer, training=False, args=args
-                )
-
+                val_loss, val_pck = train(epoch, model, val_dl, strategy, optimizer, training=False, args=args)
                 log_benchmark["val_loss"] = val_loss
                 log_benchmark["val_pck_sim"] = val_pck['sim']
                 log_benchmark["val_pck_votes"] = val_pck['votes']
                 log_benchmark["val_pck_votes_geo"] = val_pck['votes_geo']
 
-        # Save the best model
-        
+        # save the best model
         if args.split in ['old_trn', 'trn']:
             model_pck = val_pck
         else:
             model_pck = trn_pck
-            
         if (epoch%5)==0:
-            Logger.save_epoch(model, epoch, model_pck[args.loss_stage])
-        if model_pck[args.loss_stage] > best_val_pck:
+            Logger.save_epoch(model, epoch, model_pck["votes_geo"])
+        if model_pck["votes_geo"] > best_val_pck:
             old_best_val_pck = best_val_pck
-            best_val_pck = model_pck[args.loss_stage]
+            best_val_pck = model_pck["votes_geo"]
             Logger.save_model(model, epoch, best_val_pck, old_best_val_pck)
 
+        # testing
         with torch.no_grad():
-            _, test_pck = train(
-                epoch, model, test_dl, strategy, optimizer, training=False, args=args, testing=True
-            )
-            log_benchmark["test_pck_sim"] = test_pck['sim']
-            log_benchmark["test_pck_votes"] = test_pck['votes']
-            log_benchmark["test_pck_votes_geo"] = test_pck['votes_geo']
+            test_pck = test(model, test_dl, args)
+            log_benchmark["test_pck"] = test_pck
 
-#         log_benchmark["epochs"] = epoch
         if args.use_wandb:
             wandb.log({'epochs':epoch})
             wandb.log(log_benchmark)
 
-#             wandb.log(
-#                 {
-#                     "trn_loss": trn_loss,
-#                     "trn_pck_sim": trn_pck['sim'],
-#                     "trn_pck_votes": trn_pck['votes'],
-#                     "trn_pck_votes_geo": trn_pck['votes_geo'],
-
-#                     "val_loss":val_loss,
-#                     "val_pck_sim":val_pck['sim'],
-#                     "val_pck_votes":val_pck['votes'],
-#                     "val_pck_votes_geo":val_pck['votes_geo'],
-
-#                     "test_pck_sim":test_pck['sim'],
-#                     "test_pck_votes":test_pck['votes'],
-#                     "test_pck_votes_geo":test_pck['votes_geo'],
-#                 }
-#             )
         time_message = 'Training %d epochs took:%4.3f\n' % (epoch+1, (time.time()-train_started)/60) + ' minutes'
         Logger.info(time_message)
-        # print(time_message)
 
-    #     Logger.tbd_writer.add_scalars(
-    #         "data/loss", {"trn_loss": trn_loss, "val_loss": val_loss}, epoch
-    #     )
-    #     Logger.tbd_writer.add_scalars(
-    #         "data/pck", {"trn_pck": trn_pck, "val_pck": val_pck}, epoch
-    #     )
-
-    # Logger.tbd_writer.close()
     Logger.info("==================== Finished training ====================")
-    Logger.info(time_message)
-    # print(time_message)

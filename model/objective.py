@@ -11,7 +11,7 @@ from .base.norm import Norm
 class Objective:
     r"""Provides training objectives of DHPF"""
     @classmethod
-    def initialize(cls, target_rate, alpha):
+    def initialize(cls, target_rate, alpha=0.1):
         cls.softmax = torch.nn.Softmax(dim=1)
         cls.target_rate = target_rate
         cls.alpha = alpha

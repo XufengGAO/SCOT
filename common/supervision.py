@@ -27,7 +27,7 @@ class SupervisionStrategy(ABC):
 class StrongSupStrategy(SupervisionStrategy):
     def get_image_pair(self, batch, *args):
         r"""Returns (semantically related) pairs for strongly-supervised training"""
-        return batch['src_img'], batch['trg_img']
+        return batch['src_img'].to(device), batch['trg_img'].to(device)
 
     def get_correlation(self, correlation_matrix):
         r"""Returns correlation matrices of 'ALL PAIRS' in a batch"""
@@ -60,7 +60,6 @@ class EPESupStrategy(SupervisionStrategy):
 
     def compute_loss(self, correlation_matrix, *args):
         r"""Strongly-supervised matching loss (L_{match})"""
-
         
         batch = args[1]
         feat_size = args[2]

@@ -9,14 +9,13 @@ class Geometry:
     def initialize(cls, feat_size, device, rfsz, jsz, img_size=256): # feat_size = [60, 60]
         cls.max_pts = 400
         cls.eps = 1e-30
+
         # rfs, (3600, 4), top-left point (box[:,0], box[:,1]), down-right point (box[:,2], box[:,3])
         cls.rfs, cls.feat_ids = cls.receptive_fields(rfsz, jsz, feat_size, device) # base block, receptive field for each hyperpixel in original image
-        cls.rfs = cls.rfs.to(device)
-        cls.feat_ids = cls.feat_ids.to(device)
+        cls.rf_center = Geometry.center(cls.rfs) # center for each receptive field in original image
+
         cls.device = device
         cls.feat_size = feat_size[0]
-        # center, (3600, 2)
-        cls.rf_center = Geometry.center(cls.rfs) # center for each receptive field in original image
         cls.img_size = img_size
 
     @classmethod

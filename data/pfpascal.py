@@ -72,9 +72,9 @@ class PFPascalDataset(CorrespondenceDataset):
         # sample['src_bbox'] = self.src_bbox[idx].to(self.device) # (x11, x12, x21, x22)
         # sample['trg_bbox'] = self.trg_bbox[idx].to(self.device)
         # sample['pckthres'] = self.get_pckthres(sample).to(self.device) # max(height, width)
-        sample['src_bbox'] = self.get_bbox(self.src_bbox, idx, sample['src_imsize'])
-        sample['trg_bbox'] = self.get_bbox(self.trg_bbox, idx, sample['trg_imsize'])
-        sample['pckthres'] = self.get_pckthres(sample)
+        sample['src_bbox'] = self.get_bbox(self.src_bbox, idx, sample['src_ratio'])
+        sample['trg_bbox'] = self.get_bbox(self.trg_bbox, idx, sample['trg_ratio'])
+        sample['pckthres'] = self.get_pckthres(sample) # rescaled pckthres
 
         # Horizontal flip of key-points when training (no training in HyperpixelFlow)
         if self.split == 'trn' and self.flip[idx]: # width - current x-axis
@@ -96,11 +96,11 @@ class PFPascalDataset(CorrespondenceDataset):
 
         return sample
 
-    def get_bbox(self, bbox_list, idx, imsize):
+    def get_bbox(self, bbox_list, idx, inter_ratio):
         r"""Returns object bounding-box"""
         bbox = bbox_list[idx].clone()
-        bbox[0::2] *= (self.imside[1] / imsize[1])
-        bbox[1::2] *= (self.imside[0] / imsize[0]) 
+        bbox[0::2] *= (inter_ratio[1])
+        bbox[1::2] *= (inter_ratio[0]) 
         return bbox
     
     def horizontal_flip(self, sample):
@@ -117,18 +117,6 @@ class PFPascalDataset(CorrespondenceDataset):
 
         sample['src_img'] = torch.flip(sample['src_img'], dims=(2,))
         sample['trg_img'] = torch.flip(sample['trg_img'], dims=(2,))
-
-        """
-        finally each data inclues:
-        dict_keys(['src_imname' (str), 'trg_imname' (str), 'pair_classid' (int), 
-                   'pair_class' (str), 'src_img' (tensor, CxHxW), 'trg_img'(tensor, CxHxW), 
-                   'src_kps' (tensor, 2xNum_kps), 'trg_kps' (tensor, 2xNum_kps), 
-                   'datalen'(tensor, len(self.train_data)), 
-                   'src_bbox'(tensor, size=4, 4 numbers), 
-                   'trg_bbox' (tensor, size=4, 4 numbers), 
-                   'pckthres' (tensor, size=1, max(height, width))))
-        """
-
    
 
     def get_mask(self, img_names, idx):

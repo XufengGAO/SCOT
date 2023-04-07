@@ -72,6 +72,7 @@ class Logger:
     def save_epoch(cls, model, epoch, val_pck):
         torch.save(model.state_dict(), os.path.join(cls.logpath, 'eooch_%d.pt'%(epoch)))
         cls.info('Epoch Model saved @%d w/ val. PCK: %5.2f on [%s]\n' % (epoch, val_pck, os.path.join(cls.logpath, 'eooch_%d.pt'%(epoch))))
+    
     @classmethod
     def save_model(cls, model, epoch, val_pck, old_val_pck):
         torch.save(model.state_dict(), os.path.join(cls.logpath, 'best_model.pt'))
@@ -108,30 +109,62 @@ class Logger:
 
 class AverageMeter:
     r"""Stores loss, evaluation results, selected layers"""
-    def __init__(self, benchamrk, cls=None):
+    def __init__(self, benchmark, cls=None):
         r"""Constructor of AverageMeter"""
-        if benchamrk == 'caltech':
-            self.buffer_keys = ['ltacc', 'iou']
-        else:
+
+        self.eval_buf = {
+            'pfwillow': {'pck': [], 'cls_pck': dict()},
+            'pfpascal': {'pck': [], 'cls_pck': dict()},
+            'spair':    {'pck': [], 'cls_pck': dict()}
+        }
+        self.eval_buf = self.eval_buf[benchmark]
+
+        if cls is not None:
             self.buffer_keys = ['pck']
 
-        # buffer for average pck
-        self.buffer = {'sim':{}, 'votes':{}, 'votes_geo':{}}
-        for key in self.buffer_keys:
-            self.buffer['sim'][key] = []
-            self.buffer['votes'][key] = []
-            self.buffer['votes_geo'][key] = []
+            # buffer for average pck
+            self.buffer = {'sim':{}, 'votes':{}, 'votes_geo':{}}
+            for key in self.buffer_keys:
+                self.buffer['sim'][key] = []
+                self.buffer['votes'][key] = []
+                self.buffer['votes_geo'][key] = []
 
-        # buffer for class-pck
-        self.sel_buffer = {'sim':{}, 'votes':{}, 'votes_geo':{}}
-        for sub_cls in cls:
-            if self.sel_buffer.get(sub_cls) is None:
-                self.sel_buffer['sim'][sub_cls] = []
-                self.sel_buffer['votes'][sub_cls] = []
-                self.sel_buffer['votes_geo'][sub_cls] = []
+            # buffer for class-pck
+            self.sel_buffer = {'sim':{}, 'votes':{}, 'votes_geo':{}}
+            for sub_cls in cls:
+                if self.sel_buffer.get(sub_cls) is None:
+                    self.sel_buffer['sim'][sub_cls] = []
+                    self.sel_buffer['votes'][sub_cls] = []
+                    self.sel_buffer['votes_geo'][sub_cls] = []
 
-        self.loss_buffer = []
+            # buffer for loss
+            self.loss_buffer = []
+                
+    def eval_pck(self, prd_kps, data, alpha=0.1):
+        r"""Compute percentage of correct key-points (PCK) based on prediction"""
+        pckthres = data['pckthres'][0] 
+        # ncorrt = correct_kps(data['trg_kps'].cuda(), prd_kps, pckthres, data['alpha'])
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        ncorrt = correct_kps(data['trg_kps'][0].to(device), prd_kps, pckthres, alpha)
+        pair_pck = int(ncorrt) / int(data['trg_kps'].size(1))
 
+        self.eval_buf['pck'].append(pair_pck)
+
+        if self.eval_buf['cls_pck'].get(data['pair_class'][0]) is None:
+            self.eval_buf['cls_pck'][data['pair_class'][0]] = []
+        self.eval_buf['cls_pck'][data['pair_class'][0]].append(pair_pck)
+
+    def log_pck(self):
+        r"""Log percentage of correct key-points (PCK)"""
+
+        pck = sum(self.eval_buf['pck']) / len(self.eval_buf['pck'])
+        for cls in self.eval_buf['cls_pck']:
+            cls_avg = sum(self.eval_buf['cls_pck'][cls]) / len(self.eval_buf['cls_pck'][cls])
+            Logger.info('%15s: %3.3f' % (cls, cls_avg))
+        Logger.info(' * Testing Average: %3.3f' % pck)
+
+        return pck
+    
     def update(self, eval_result_list, category, loss=None):
         for key in self.buffer_keys: # all pck terms
             self.buffer['sim'][key] += eval_result_list[0][key]
@@ -147,10 +180,6 @@ class AverageMeter:
 
         if loss is not None: # mean loss term
             self.loss_buffer.append(loss)
-
-        # print(self.buffer)
-        # print(self.sel_buffer)
-        # print(self.loss_buffer)
 
     def write_result(self, split, epoch=-1):
         msg = '*** %s ' % split
@@ -182,3 +211,12 @@ class AverageMeter:
                                                                                sum(self.buffer['votes_geo'][key]) / len(self.buffer['votes_geo'][key]),)
 
         Logger.info(msg)
+
+
+def correct_kps(trg_kps, prd_kps, pckthres, alpha=0.1):
+    r"""Compute the number of correctly transferred key-points"""
+    l2dist = torch.pow(torch.sum(torch.pow(trg_kps - prd_kps, 2), 0), 0.5)
+    thres = pckthres.expand_as(l2dist).float()
+    correct_pts = torch.le(l2dist, thres * alpha)
+
+    return torch.sum(correct_pts)

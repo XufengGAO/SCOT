@@ -7,16 +7,10 @@ import os
 from torch.utils.data import DataLoader
 import torch
 import time
-from PIL import Image
 from test_data import download
 from model import scot_CAM, util, geometry, evaluation
 from common import utils
-from common.logger import AverageMeter, Logger
-from common.evaluation import Evaluator
-import torch.optim as optim
-from pprint import pprint
 import wandb
-from model.base.geometry import Geometry
 import logging
 
 # wandb.login()
@@ -119,10 +113,10 @@ if __name__ == "__main__":
 
     # 4. Dataset download & initialization
     num_workers = 16 if torch.cuda.is_available() else 8
-    pin_memory = True if torch.cuda.is_available() else 8
+    pin_memory = True if torch.cuda.is_available() else False
  
     dset = download.load_dataset(args.benchmark, args.datapath, args.thres, device, args.split, args.cam)
-    dataloader = DataLoader(dset, batch_size=1, num_workers=0)
+    dataloader = DataLoader(dset, batch_size=1, num_workers=num_workers)
 
     # 5. Evaluator
     evaluator = evaluation.Evaluator(args.benchmark, device)

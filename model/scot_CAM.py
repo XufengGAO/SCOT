@@ -15,7 +15,7 @@ import numpy as np
 
 class SCOT_CAM(nn.Module):
     r"""SCOT framework"""
-    def __init__(self, backbone, hyperpixel_ids, benchmark, device, cam, use_xavier=False, img_side=(256,256), weight_thres=0.05, select_all=0.85, training=True):
+    def __init__(self, backbone, hyperpixel_ids, benchmark, device, cam, use_xavier=False, weight_thres=0.05, select_all=0.85):
         r"""Constructor for SCOT framework"""
         super(SCOT_CAM, self).__init__()
 
@@ -69,50 +69,40 @@ class SCOT_CAM(nn.Module):
 
         # weighted module
         self.learner = gating.DynamicFeatureSelection(hyperpixel_ids, use_xavier, weight_thres).to(device)
-        self.upsample_size = [int(img_side[0] / 4), int(img_side[1] / 4)]
+        self.feat_size = (64, 64)
 
         self.select_all = select_all
-        self.training = training
 
-        # TODO, remove it later
-        # self.update_rfsz = 11
-        # self.update_jsz = 4
-        # Geometry.initialize(self.upsample_size, device, self.update_rfsz, self.update_jsz)  # receptive filed, centers, neighbours, keypoints
-
-    def forward(self, src_img, trg_img, sim, exp1, exp2, eps, classmap, src_mask, trg_mask, backbone):
+    def forward(self, src_img, trg_img, sim, exp1, exp2, eps, classmap, src_mask, trg_mask, backbone, training=True):
         r"""Forward pass"""
 
-        # update the hyperpixel_ids by checking the weights
-
-        if self.training:
-            prob = torch.rand(1).item()
-        else:
-            prob = -100
-            
+        # 1. Update the hyperpixel_ids by checking the weights
+        prob = torch.rand(1).item() if training else -100
         if prob > self.select_all:
             n_layers = {"resnet50": 17, "resnet101": 34, "fcn101": 34}
             self.hyperpixel_ids = list(range(n_layers[backbone]))
         else:
             self.hyperpixel_ids = self.learner.return_hyperpixel_ids()
-            # if self.hyperpixel_ids[0] > 9 or len(self.hyperpixel_ids) == 0:
-            #     self.hyperpixel_ids = [0] + self.hyperpixel_ids
 
-
+        # 2. Update receptive field size
         self.update_rfsz = self.rfsz[self.hyperpixel_ids[0]]
         self.update_jsz = self.jsz[self.hyperpixel_ids[0]]
 
+        # 3. extract hyperpixel
         src_hyperpixels = self.extract_hyperpixel(src_img, classmap, src_mask, backbone)
         trg_hyperpixels = self.extract_hyperpixel(trg_img, classmap, trg_mask, backbone)
 
-        # arg.sim, args.exp1, args.exp2, args.eps
+        # print(self.feat_size, self.update_jsz, self.update_rfsz)
+
+        # 4. rhm
         sim, votes, votes_geo = rhm_map.rhm(src_hyperpixels, trg_hyperpixels, 
-                                    self.hsfilter, sim, exp1, 
-                                    exp2, eps)
-        # print("confidence", confidence_ts.size(), torch.max(confidence_ts), torch.min(confidence_ts))
+                                            self.hsfilter, sim, exp1, 
+                                            exp2, eps)
+        
+        
+        Geometry.initialize(self.feat_size, self.device, self.update_rfsz, self.update_jsz)
 
-        Geometry.initialize(self.upsample_size, self.device, self.update_rfsz, self.update_jsz)  # receptive filed, centers, neighbours, keypoints
-
-        return sim, votes, votes_geo, src_hyperpixels[0], trg_hyperpixels[0], self.upsample_size
+        return sim, votes, votes_geo, src_hyperpixels[0], trg_hyperpixels[0], self.feat_size
 
 
     def extract_hyperpixel(self, img, classmap, mask, backbone="resnet101"):
@@ -126,33 +116,32 @@ class SCOT_CAM(nn.Module):
                 weights: weight importance for each pixel according to CAM, (num_pixels, 1)
         """
 
-        # TODO, extremely deep channels
+
         hyperfeats, feat_map, fc = self.extract_intermediate_feat(img, return_hp=True, backbone=backbone)
-        self.upsample_size = (hyperfeats.size()[2], hyperfeats.size()[3])
-        # print('feature extrac', hyperfeats.size(), rfsz, jsz, feat_map.size(), fc.size())
-        # feature extrac torch.Size([4, 15168, 64, 64]) tensor(11) tensor(4) 
+        self.feat_size = (hyperfeats.size()[2], hyperfeats.size()[3])
+        # print('feature extrac', hyperfeats.size(), feat_map.size(), fc.size())
+        # feature extrac torch.Size([4, 15168, 64, 64]) 
         # torch.Size([4, 2048, 8, 8]) torch.Size([4, 1000])
-   
-        # hygeometry size = (hyperfeats.w * h, 4)
+        
         hpgeometry = geometry.receptive_fields(self.update_rfsz, self.update_jsz, hyperfeats.size()).to(self.device)
-        # print('hpgeometry', hpgeometry.size(), hpgeometry, Geometry.rfs)
+        # print('hpgeometry', hpgeometry.size())
         # torch.Size([4096, 4])
 
         # flattern each channel: torch.Size([4, 4096, 15168]) = (batch, whole hyperpixels, channels)
         hyperfeats = hyperfeats.view(hyperfeats.size()[0], hyperfeats.size()[1], -1).transpose(1, 2)
         # print(hyperfeats.size(), len(hyperfeats))
-        
+
         # Prune boxes on margins (Otherwise may cause error)
-        # TODO, modify it later
         if self.benchmark in ['TSS']:
             hpgeometry, valid_ids = geometry.prune_margin(hpgeometry, img.size()[1:], 10)
             hyperfeats = hyperfeats[valid_ids, :]
 
 
-        # TODO: modify it later
         # len return 1st dim
         # weight: (4, 4096, 1)
         weights = torch.ones(len(hyperfeats), hyperfeats.size()[1]).to(hyperfeats.device)
+        # print(weights.size())
+
         # weight points, CAM weighter pixels importance
         if classmap in [1]: 
             if mask is None:
@@ -161,10 +150,15 @@ class SCOT_CAM(nn.Module):
                     mask = self.get_FCN_map(img, feat_map, fc, sz=(img.size(2),img.size(3)))
                 else:
                     mask = self.get_CAM_multi(img, feat_map, fc, sz=(img.size(2),img.size(3)), top_k=2)
+                    # for i in range(4):
+                    #     mask0 = self.get_CAM_multi2(img[i].unsqueeze(0), feat_map[i].unsqueeze(0), fc[i].unsqueeze(0), sz=(img.size(2),img.size(3)), top_k=2)
+                    #     print(mask0.size())
+                    #     print(torch.sum(mask[i]-mask0))
+                        # print(torch.max(mask[i]), torch.min(mask[i]))
                 scale = 1.0
             else:
                 scale = 255.0
-
+            
             hpos = geometry.center(hpgeometry) # 4096 2
             # print("hpos", hpos.size(), hpos[:], Geometry.rf_center.size(), Geometry.rf_center[:])
 
@@ -177,16 +171,12 @@ class SCOT_CAM(nn.Module):
             weights[hselect>0.5*scale] = 0.9
             weights[hselect>0.6*scale] = 1.0
 
-            # print('clasmap', weights.size())
-
             del hpos
             del hselect
             
         # print('no-clasmap', weights.size())
         # print(img.size())
         # print(img.size()[2:][::-1], weights.unsqueeze(-1).size())
-
-        
 
         return hpgeometry, hyperfeats, img.size()[2:][::-1], weights.unsqueeze(-1)
 
@@ -204,20 +194,18 @@ class SCOT_CAM(nn.Module):
         """
 
         feats = []
-        # Layer 0
+
         with torch.no_grad():
+            # Layer 0
             feat = self.backbone.conv1.forward(img)
             feat = self.backbone.bn1.forward(feat)
             feat = self.backbone.relu.forward(feat)
             feat = self.backbone.maxpool.forward(feat)
-        if 0 in self.hyperpixel_ids:
-            # feats.append(feat.clone())
-            feats.append(self.learner(0, feat.clone())) # scaled feats
+            if 0 in self.hyperpixel_ids:
+                feats.append(feat.clone()) # scaled feats
 
-        # Layer 1-4
-        
-        for hid, (bid, lid) in enumerate(zip(self.bottleneck_ids, self.layer_ids)):
-            with torch.no_grad():
+            # Layer 1-4
+            for hid, (bid, lid) in enumerate(zip(self.bottleneck_ids, self.layer_ids)):
                 res = feat
                 feat = self.backbone.__getattr__('layer%d' % lid)[bid].conv1.forward(feat)
                 feat = self.backbone.__getattr__('layer%d' % lid)[bid].bn1.forward(feat)
@@ -233,36 +221,41 @@ class SCOT_CAM(nn.Module):
                 
                 feat += res
 
-            if hid + 1 in self.hyperpixel_ids:
-                # feats.append(feat.clone())
-                feats.append(self.learner(hid+1, feat.clone())) # scaled feats
-            with torch.no_grad():
+                if hid + 1 in self.hyperpixel_ids:
+                    feats.append(feat.clone())
+
                 feat = self.backbone.__getattr__('layer%d' % lid)[bid].relu.forward(feat)
 
-        # Global Average Pooling feature map
-        feat_map = feat  # feature map before gloabl avg-pool
-        if backbone!='fcn101':
-            x = self.backbone.avgpool(feat)
-            x = torch.flatten(x, 1)
-            fc = self.backbone.fc(x)  # fc output
-        else:
-            fc = None
+            # Global Average Pooling feature map
+            feat_map = feat  # feature map before gloabl avg-pool
+            if backbone!='fcn101':
+                x = self.backbone.avgpool(feat)
+                x = torch.flatten(x, 1)
+                fc = self.backbone.fc(x)  # fc output
+            else:
+                fc = None
 
-        if not return_hp: # only return final outputs, feat_map and fc
-            return feat_map,fc
+            if not return_hp: # only return final outputs, feat_map and fc
+                return feat_map,fc
+            
+            # torch.Size([4, 3, 240, 240]) torch.Size([4, 2048, 8, 8]) torch.Size([4, 1000])
+            # print(img.size(), feat_map.size(), fc.size())
+
+            # Up-sample & concatenate features to construct a hyperimage
+            for idx, hyper_feat in enumerate(feats):
+                if idx == 0:
+                    continue
+                # upsampling deep features
+                feats[idx] = F.interpolate(hyper_feat, tuple(feats[0].size()[2:]), None, 'bilinear', True)
         
-        # torch.Size([4, 3, 240, 240]) torch.Size([4, 2048, 8, 8]) torch.Size([4, 1000])
-        # print(img.size(), feat_map.size(), fc.size())
 
-        # Up-sample & concatenate features to construct a hyperimage
-        for idx, feat in enumerate(feats):
-            if idx == 0:
-                continue
-            # upsampling deep features
-            feats[idx] = F.interpolate(feat, tuple(feats[0].size()[2:]), None, 'bilinear', True)
-        
-
+        # scaled the features
+        for i,  (hyper_id, hyper_feat) in enumerate(zip(self.hyperpixel_ids, feats)):
+            feats[i] = self.learner(hyper_id, hyper_feat)
         feats = torch.cat(feats, dim=1)  # 4-dim, BCHW
+
+        # print(feats.size(), feats.requires_grad)
+        # torch.Size([2, 15168, 64, 64]) True
 
         # return 3-dim tensor, cause B=1
         return feats, feat_map, fc
@@ -288,6 +281,40 @@ class SCOT_CAM(nn.Module):
         return output_cam
 
 
+    def get_CAM_multi2(self, img, feat_map, fc, sz, top_k=2):
+        scales = [1.0,1.5,2.0]
+        map_list = []
+        for scale in scales:
+            if scale>1.0:
+                if scale*scale*sz[0]*sz[1] > 800*800:
+                    scale = min(800/sz[0],800/sz[1])
+                    scale = min(1.5,scale)
+                img = F.interpolate(img, (int(scale*sz[0]),int(scale*sz[1])), None, 'bilinear', True) # 1x3xHxW
+                feat_map, fc = self.extract_intermediate_feat(img,return_hp=False)
+
+            logits = F.softmax(fc, dim=1)
+            scores, pred_labels = torch.topk(logits, k=top_k, dim=1)
+            pred_labels = pred_labels[0]
+            bz, nc, h, w = feat_map.size()
+
+            output_cam = []
+            for label in pred_labels:
+                cam = self.backbone.fc.weight[label,:].unsqueeze(0).mm(feat_map.view(nc,h*w))
+                cam = cam.view(1,1,h,w)
+                cam = F.interpolate(cam, (sz[0],sz[1]), None, 'bilinear', True)[0,0] # HxW
+                cam = (cam-cam.min()) / cam.max()
+                output_cam.append(cam)
+            output_cam = torch.stack(output_cam,dim=0) # kxHxW
+            output_cam = output_cam.max(dim=0)[0] # HxW
+            
+            map_list.append(output_cam)
+        map_list = torch.stack(map_list,dim=0)
+        sum_cam = map_list.sum(0)
+        norm_cam = sum_cam / (sum_cam.max()+1e-5)
+
+        return norm_cam
+    
+    
     def get_CAM_multi(self, img, feat_map, fc, sz, top_k=2):
         # img = Bx3x256x256
         # featmap = Bx2048x8x8
@@ -309,8 +336,7 @@ class SCOT_CAM(nn.Module):
             output_cam = []
 
             # print(self.backbone.fc.weight.size()) # 1000x2048
-            # print(pred_labels) # Bx2
-            cam = self.backbone.fc.weight[pred_labels,:].bmm(feat_map.view(bz, nc, h*w)) # Bx2x64
+            cam = self.backbone.fc.weight[pred_labels,:].bmm(feat_map.view(bz, nc, h*w)) # Bx2048x64
             cam = cam.view(bz,-1,h,w) # Bx2x8x8
             cam = F.interpolate(cam, (sz[0],sz[1]), None, 'bilinear', True) # Bx2x240x240
             

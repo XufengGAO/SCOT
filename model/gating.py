@@ -20,6 +20,7 @@ class DynamicFeatureSelection(nn.Module):
         return feat * layerweight_norm 
     
     def return_hyperpixel_ids(self):
-        layerweight_norm = self.layerweight[0].sigmoid().data
-        
+        with torch.no_grad():
+            layerweight_norm = self.layerweight[0].sigmoid().data
+
         return (layerweight_norm > self.thres).nonzero().view(-1).tolist()

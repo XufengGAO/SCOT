@@ -15,18 +15,18 @@ python train.py \
     --lr 0.01 \
     --momentum 0.9 \
     --epochs 100 \
-    --batch_size 16 \
+    --batch_size 2 \
     --optimizer 'sgd' \
     --exp1 1.0 \
     --exp2 0.5 \
-    --classmap 0 \
-    --use_wandb True \
+    --classmap 1 \
+    --use_wandb False \
     --use_xavier False \
     --use_scheduler False \
     --use_grad_clip False \
     --loss_stage "votes" \
-    --split "trn" \
-    --selfsup "dino" 
+    --split "trn" 
+    # --selfsup "dino" 
     # --use_pretrained True \
     # --pretrained_path "/scratch/students/2023-spring-sp-xugao/SCOT/logs/_0402_080338.log/eooch_100.pt"\
     # --run_id "uau60b8q" \

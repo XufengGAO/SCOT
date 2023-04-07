@@ -7,19 +7,17 @@ import torch
 import torch.nn as nn
 from . import geometry
 
-
+device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 relu = nn.ReLU()
 
-def perform_sinkhorn(C,epsilon,mu,nu,a=[],warm=False,niter=10,tol=10e-9):
+def perform_sinkhorn(C,epsilon,mu,nu,a=[],warm=False,niter=1,tol=10e-9):
     """Main Sinkhorn Algorithm"""
-    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+
     if not warm:
-        a = torch.ones((C.shape[0], C.shape[1], 1)) / torch.ones((C.shape[0], C.shape[1], 1)).sum(dim=1).unsqueeze(1)
+        a = torch.ones((C.shape[0], C.shape[1], 1)) / C.shape[1]
         a = a.to(device)
-        # TODO  a = a.cuda()
 
     K = torch.exp(-C/epsilon)
-
     # print(K.size(), a.size()) # [2, 4096, 4096], ([2, 4096, 1])
     # print(mu.size(), nu.size())
 
@@ -47,6 +45,33 @@ def perform_sinkhorn(C,epsilon,mu,nu,a=[],warm=False,niter=10,tol=10e-9):
     # del a; del b; del K
     return PI,mu,nu,Err
 
+def perform_sinkhorn2(C,epsilon,mu,nu,a=[],warm=False,niter=1,tol=10e-9):
+    """Main Sinkhorn Algorithm"""
+    if not warm:
+        a = torch.ones((C.shape[0],1)) / C.shape[0]
+        a = a.to(device)
+
+    K = torch.exp(-C/epsilon)
+
+    Err = torch.zeros((niter,2)).to(device)
+    for i in range(niter):
+        b = nu/torch.mm(K.t(), a)
+        if i%2==0:
+            Err[i,0] = torch.norm(a*(torch.mm(K, b)) - mu, p=1)
+            if i>0 and (Err[i,0]) < tol:
+                break
+
+        a = mu / torch.mm(K, b)
+
+        if i%2==0:
+            Err[i,1] = torch.norm(b*(torch.mm(K.t(), a)) - nu, p=1)
+            if i>0 and (Err[i,1]) < tol:
+                break
+
+        PI = torch.mm(torch.mm(torch.diag(a[:,-1]),K), torch.diag(b[:,-1]))
+
+    del a; del b; del K
+    return PI,mu,nu,Err
 
 def appearance_similarity(src_feats, trg_feats, exp1=3):
     r"""Semantic appearance similarity (exponentiated cosine)"""
@@ -57,7 +82,6 @@ def appearance_similarity(src_feats, trg_feats, exp1=3):
     sim = torch.pow(relu(sim), exp1)
 
     return sim
-
 
 def appearance_similarityOT(src_feats, trg_feats, exp1=1.0, exp2=1.0, eps=0.05, src_weights=None, trg_weights=None):
     r"""Semantic Appearance Similarity"""
@@ -73,57 +97,61 @@ def appearance_similarityOT(src_feats, trg_feats, exp1=1.0, exp2=1.0, eps=0.05, 
     correleation = torch.bmm(src_feats, trg_feats.transpose(1, 2))
     # print(correleation.size()) # [4, 4096, 4096]
 
-    sim = correleation / (torch.bmm(src_feat_norms, trg_feat_norms) + 0.001)
+    sim = correleation / (torch.bmm(src_feat_norms, trg_feat_norms) + 1e-10)
     sim = torch.pow(relu(sim), 1.0) # clamp
     # print("PI", sim.size(), sim.max())
     # print("similarity map", sim.size()) # [4, 4096, 4096]
 
     #sim = sim*st_weights
-    cost = 1-sim
+    costs = 1-sim
     
+    bz = src_feats.size()[0]
     n1 = src_feats.size()[1]
-    # TODO, may change later
-    # mu = (torch.ones((n1,))/n1).cuda()
-    # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    # mu = (torch.ones((n1,))/n1).to(device)
+    mus = (torch.ones((bz,n1))/n1).to(device)
+    if src_weights is not None:
+        mus = src_weights.squeeze(-1) / src_weights.sum(dim=1) # normalize weights
 
-    mu = src_weights / src_weights.sum(dim=1).unsqueeze(1) # normalize weights
-    # TODO  nu = (torch.ones((n2,))/n2).cuda()
-    # nu = (torch.ones((n2,))/n2).to(device)
-    nu = trg_weights / trg_weights.sum(dim=1).unsqueeze(1)
+    n2 = trg_feats.size()[1]
+    nus = (torch.ones((bz,n2))/n1).to(device)
+    if trg_weights is not None:
+        nus = trg_weights.squeeze(-1) / trg_weights.sum(dim=1)
     ## ---- <Run Optimal Transport Algorithm> ----
     #mu = mu.unsqueeze(1)
     #nu = nu.unsqueeze(1)
-    # print('cost', cost.size()) # [2, 4096, 4096]
-    # print('mu/nu', mu.size(), nu.size()) # [2, 4096, 1, 1]
-
-
 
     # with torch.no_grad():
     epsilon = eps
     cnt = 0
-    while True: # see Algorithm 1
-        # PI is optimal transport plan or transport matrix.
-        PI,_,_,_ = perform_sinkhorn(cost, epsilon, mu, nu) # 4x4096x4096
+    PIs = []
+    for cost, mu, nu in zip(costs, mus, nus):
 
-        #PI = sinkhorn_stabilized(mu, nu, cost, reg=epsilon, numItermax=50, method='sinkhorn_stabilized', cuda=True)
-        if not torch.isnan(PI).any():
-            if cnt>0:
-                print(cnt)
-            break
-        else: # Nan encountered caused by overflow issue is sinkhorn
-            epsilon *= 2.0
-            #print(epsilon)
-            cnt += 1
+        # print('cost', cost.size()) # [4096, 4096]
+        # print('mu/nu', mu.size(), nu.size()) # [4096]
 
-    PI = n1*PI # re-scale PI 
-    #exp2 = 1.0 for spair-71k, TSS
-    #exp2 = 0.5 # for pf-pascal and pfwillow
-    PI = torch.pow(relu(PI), exp2)
+        while True: # see Algorithm 1
+            # PI is optimal transport plan or transport matrix.
+            PI,_,_,_ = perform_sinkhorn2(cost, epsilon, mu, nu) # 4x4096x4096
+            
+            #PI = sinkhorn_stabilized(mu, nu, cost, reg=epsilon, numItermax=50, method='sinkhorn_stabilized', cuda=True)
+            if not torch.isnan(PI).any():
+                if cnt>0:
+                    print(cnt)
+                break
+            else: # Nan encountered caused by overflow issue is sinkhorn
+                epsilon *= 2.0
+                #print(epsilon)
+                cnt += 1
 
-    return PI, sim
+        PI = n1*PI # re-scale PI 
+        #exp2 = 1.0 for spair-71k, TSS
+        #exp2 = 0.5 # for pf-pascal and pfwillow
+        PI = torch.pow(relu(PI), exp2)
 
+        PIs.append(PI.unsqueeze(0))
 
+    PIs = torch.cat(PIs, dim=0)
+
+    return PIs, sim
 
 def hspace_bin_ids(src_imsize, src_box, trg_box, hs_cellsize, nbins_x):
     r"""Compute Hough space bin id for the subsequent voting procedure"""
@@ -165,30 +193,29 @@ def rhm(src_hyperpixels, trg_hyperpixels, hsfilter, sim, exp1, exp2, eps, ncells
         return votes
     # print("votes:", votes.size(), votes.requires_grad, torch.max(votes), torch.min(votes))
     # print("imsize", src_imsize, trg_imsize, src_hpgeomt.size(), ncells)
-
+    
     geometric_scores = []
-    with torch.no_grad():
-        nbins_x, nbins_y, hs_cellsize = build_hspace(src_imsize, trg_imsize, ncells)
-        bin_ids = hspace_bin_ids(src_imsize, src_hpgeomt, trg_hpgeomt, hs_cellsize, nbins_x)
-        hspace = src_hpgeomt.new_zeros((len(src_hpgeomt), nbins_y * nbins_x))
 
-        # Proceed voting
-        hbin_ids = bin_ids.add(torch.arange(0, len(src_hpgeomt)).to(src_hpgeomt.device).
-                            mul(hspace.size(1)).unsqueeze(1).expand_as(bin_ids))
-        for vote in votes:
-            new_hspace = hspace.view(-1).index_add(0, hbin_ids.view(-1), vote.detach().clone().view(-1)).view_as(hspace)
-            new_hspace = torch.sum(new_hspace, dim=0)
+    nbins_x, nbins_y, hs_cellsize = build_hspace(src_imsize, trg_imsize, ncells)
+    bin_ids = hspace_bin_ids(src_imsize, src_hpgeomt, trg_hpgeomt, hs_cellsize, nbins_x)
+    hspace = src_hpgeomt.new_zeros((votes.size()[1], nbins_y * nbins_x))
 
-            # Aggregate the voting results
-            new_hspace = F.conv2d(new_hspace.view(1, 1, nbins_y, nbins_x),
-                            hsfilter.unsqueeze(0).unsqueeze(0), padding=3).view(-1)
+    # Proceed voting
+    hbin_ids = bin_ids.add(torch.arange(0, votes.size()[1]).to(src_hpgeomt.device).
+                        mul(hspace.size(1)).unsqueeze(1).expand_as(bin_ids))
+    for vote in votes:
+        new_hspace = hspace.view(-1).index_add(0, hbin_ids.view(-1), vote.view(-1)).view_as(hspace)
+        new_hspace = torch.sum(new_hspace, dim=0)
 
-            geometric_scores.append(torch.index_select(new_hspace, dim=0, index=bin_ids.view(-1)).view_as(vote.detach().clone()))
+        # Aggregate the voting results
+        new_hspace = F.conv2d(new_hspace.view(1, 1, nbins_y, nbins_x),
+                        hsfilter.unsqueeze(0).unsqueeze(0), padding=3).view(-1)
 
-        geometric_scores = torch.stack(geometric_scores, dim=0)
-        # print("geometric scores", geometric_scores.size()) # 4x4096x4096
+        geometric_scores.append((vote * torch.index_select(new_hspace, dim=0, index=bin_ids.view(-1)).view_as(vote)).unsqueeze(0))
 
-    votes_geo = votes * geometric_scores
-    return sim, votes, votes_geo
+    geometric_scores = torch.cat(geometric_scores, dim=0)
+    # print("geometric scores", geometric_scores.size()) # 4x4096x4096
+
+    return sim, votes, geometric_scores
 
 
