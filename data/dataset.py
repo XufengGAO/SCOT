@@ -154,12 +154,14 @@ class CorrespondenceDataset(Dataset):
 
         if isinstance(self.imside, tuple):
             inter_ratio = (self.imside[0]/imsize[2], self.imside[1]/imsize[3])
+            new_size = (self.imside[0], self.imside[1])
         else:
             side_max = torch.max(imsize)
             inter_ratio = (self.imside/side_max, self.imside/side_max) # size reduced to new HxW
-
+            new_size = (int(imsize[2] * inter_ratio[0]), int(imsize[3] * inter_ratio[1]))
+            
         img = F.interpolate(img,
-                            size=(int(imsize[2] * inter_ratio[0]), int(imsize[3] * inter_ratio[1])),
+                            size=new_size,
                             mode='bilinear',
                             align_corners=False)
         kps[0,:] *= inter_ratio[1]
