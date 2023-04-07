@@ -86,7 +86,7 @@ def predict_kps(src_box, trg_box, src_kps, n_pts, confidence_ts):
     # confidence_ts = mutual_nn_filter(confidence_ts) # refined correleation matrix
 
     prd_kps = []
-    max_pts = 400
+    max_pts = 40
     # print(src_box.size())
     for ct, kpss, np in zip(confidence_ts, src_kps, n_pts):
 
@@ -108,14 +108,13 @@ def predict_kps(src_box, trg_box, src_kps, n_pts, confidence_ts):
         # 4. Transfer the neighbours based on given confidence tensor
         vector_summator = torch.zeros_like(src_geomet)
         src_idx = src_nbr_onehot.nonzero()
-        
         trg_idx = trg_argmax_idx.index_select(dim=0, index=src_idx[:, 1])
         vector_summator[src_idx[:, 0], src_idx[:, 1]] = trg_geomet[src_idx[:, 0], trg_idx]
-        vector_summator = vector_summator + src_displacements
+        vector_summator += src_displacements
         prd = (vector_summator.sum(dim=1) / n_neighbours.unsqueeze(1).repeat(1, 2).float()).t()
 
         # 5. Concatenate pad-points for batch
-        pads = (torch.zeros((2, max_pts - np)).to(prd.device) - 1)
+        pads = (-100*torch.ones((2, max_pts - np))).to(prd.device)
         prd = torch.cat([prd, pads], dim=1)
         prd_kps.append(prd)
 
@@ -126,6 +125,8 @@ def neighbours(box, kps):
     r"""Returns boxes in one-hot format that covers given keypoints"""
     box_duplicate = box.unsqueeze(2).repeat(1, 1, len(kps.t())).transpose(0, 1)
     kps_duplicate = kps.unsqueeze(1).repeat(1, len(box), 1)
+    
+    # print(box_duplicate.is_cuda, kps_duplicate.is_cuda)
 
     xmin = kps_duplicate[0].ge(box_duplicate[0])
     ymin = kps_duplicate[1].ge(box_duplicate[1])

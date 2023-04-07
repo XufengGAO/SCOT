@@ -145,9 +145,10 @@ class AverageMeter:
         pckthres = data['pckthres'][0] 
         # ncorrt = correct_kps(data['trg_kps'].cuda(), prd_kps, pckthres, data['alpha'])
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        ncorrt = correct_kps(data['trg_kps'][0].to(device), prd_kps, pckthres, alpha)
-        pair_pck = int(ncorrt) / int(data['trg_kps'].size(1))
-
+        ncorrt = correct_kps(data['trg_kps'][0].to(device), prd_kps, pckthres.to(device), alpha)
+        # print(int(ncorrt), data['n_pts'], data['trg_kps'].size(), data['n_pts'].is_cuda)
+        pair_pck = int(ncorrt) / int(data['n_pts'].item())
+        
         self.eval_buf['pck'].append(pair_pck)
 
         if self.eval_buf['cls_pck'].get(data['pair_class'][0]) is None:
@@ -215,6 +216,7 @@ class AverageMeter:
 
 def correct_kps(trg_kps, prd_kps, pckthres, alpha=0.1):
     r"""Compute the number of correctly transferred key-points"""
+    # print(trg_kps.is_cuda, prd_kps.is_cuda, pckthres.is_cuda)
     l2dist = torch.pow(torch.sum(torch.pow(trg_kps - prd_kps, 2), 0), 0.5)
     thres = pckthres.expand_as(l2dist).float()
     correct_pts = torch.le(l2dist, thres * alpha)

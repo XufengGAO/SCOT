@@ -14,7 +14,7 @@ python train.py \
     --alpha 0.1 \
     --lr 0.005 \
     --momentum 0.9 \
-    --epochs 100 \
+    --epochs 1 \
     --batch_size 14 \
     --optimizer 'sgd' \
     --exp1 1.0 \
@@ -25,10 +25,10 @@ python train.py \
     --use_scheduler False \
     --use_grad_clip False \
     --loss_stage "votes" \
-    --split "trn" 
-    # --selfsup "dino" 
-    # --use_pretrained True \
-    # --pretrained_path "/scratch/students/2023-spring-sp-xugao/SCOT/backbone/ckp.pt"\
+    --split "trn" \
+    --use_pretrained True \
+    --pretrained_path "/scratch/students/2023-spring-sp-xugao/SCOT/backbone/ckp_r50.pt"
+    #     # --selfsup "dino" 
     # --run_id "uau60b8q" \
     # --logpath "logs/_0402_080338.log" \
     # --start_epoch 101

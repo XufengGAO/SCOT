@@ -131,8 +131,8 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
         loss_dict = {"sim":0, "votes":1, "votes_geo":2}
         idx = loss_dict[args.loss_stage]
 
-        loss = strategy.compute_loss(model_outputs[idx], eval_result_list[idx], batch, feat_size[0])
-
+        # loss = strategy.compute_loss(model_outputs[idx], eval_result_list[idx], batch, feat_size[0])
+        loss = torch.tensor([0]).to(device)
         if training:
             loss.backward()
             if args.use_grad_clip:
@@ -279,6 +279,7 @@ def test(model, dataloader, args):
             args.backbone,
             training=False
         )
+        batch['src_kps'] = batch['src_kps'].to(device)
 
         prd_kps = geometry.predict_test_kps(src_box, trg_box, batch['src_kps'][0], votes_geo[0])
         average_meter.eval_pck(prd_kps, batch, args.alpha)
@@ -438,15 +439,14 @@ if __name__ == "__main__":
     num_workers = 16 if torch.cuda.is_available() else 8
     pin_memory = True if torch.cuda.is_available() else False
     
-    trn_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, args.split, args.cam, img_side=(256, 256))
-    trn_dl = DataLoader(dataset=trn_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory)
+    trn_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, args.split, args.cam, img_side=(256, 256), use_resize=True)
+    trn_dl = DataLoader(dataset=trn_ds, batch_size=1, shuffle=True, num_workers=num_workers, pin_memory=pin_memory)
     
     if args.split != "val":
-        val_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "val", args.cam)
-        val_dl = DataLoader(dataset=val_ds, batch_size=args.batch_size, num_workers=num_workers, pin_memory=pin_memory)
-        
+        val_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "val", args.cam, img_side=(256, 256), use_resize=True)
+        val_dl = DataLoader(dataset=val_ds, batch_size=1, num_workers=num_workers, pin_memory=pin_memory)
     
-    test_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "test", args.cam)
+    test_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "test", args.cam, use_resize=False)
     test_dl = DataLoader(dataset=test_ds, batch_size=1, num_workers=num_workers, pin_memory=pin_memory)
 
     scheduler = None
@@ -463,16 +463,16 @@ if __name__ == "__main__":
     log_benchmark = {}
     print("Training Start")
     train_started = time.time()
-    for epoch in range(args.start_epoch, args.epochs+1):
+    for epoch in range(args.start_epoch, args.epochs):
 
-        # training
-        # trn_loss, trn_pck = train(epoch, model, trn_dl, strategy, optimizer, training=True, args=args, scheduler=scheduler)
-        # log_benchmark["trn_loss"] = trn_loss
-        # log_benchmark["trn_pck_sim"] = trn_pck['sim']
-        # log_benchmark["trn_pck_votes"] = trn_pck['votes']
-        # log_benchmark["trn_pck_votes_geo"] = trn_pck['votes_geo']
+#         # training
+#         trn_loss, trn_pck = train(epoch, model, trn_dl, strategy, optimizer, training=True, args=args, scheduler=scheduler)
+#         log_benchmark["trn_loss"] = trn_loss
+#         log_benchmark["trn_pck_sim"] = trn_pck['sim']
+#         log_benchmark["trn_pck_votes"] = trn_pck['votes']
+#         log_benchmark["trn_pck_votes_geo"] = trn_pck['votes_geo']
         
-        # validation
+#         # validation
 #         if args.split != "val":
 #             with torch.no_grad():
 #                 val_loss, val_pck = train(epoch, model, val_dl, strategy, optimizer, training=False, args=args)

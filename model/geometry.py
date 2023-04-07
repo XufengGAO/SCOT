@@ -125,6 +125,8 @@ def neighbours(box, kps):
     r"""Returns boxes in one-hot format that covers given keypoints"""
     box_duplicate = box.unsqueeze(2).repeat(1, 1, len(kps.t())).transpose(0, 1)
     kps_duplicate = kps.unsqueeze(1).repeat(1, len(box), 1)
+    
+    # print(box_duplicate.is_cuda, kps_duplicate.is_cuda)
 
     xmin = kps_duplicate[0].ge(box_duplicate[0])
     ymin = kps_duplicate[1].ge(box_duplicate[1])

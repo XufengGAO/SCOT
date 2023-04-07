@@ -11,7 +11,7 @@ from model.base.geometry import Geometry
 
 class CorrespondenceDataset(Dataset):
     r"""Parent class of PFPascal, PFWillow, Caltech, and SPair""" # imside = (H, W)
-    def __init__(self, benchmark, datapath, thres, device, split, imside=(256,256)):
+    def __init__(self, benchmark, datapath, thres, device, split, imside=(256,256), use_resize=False):
         r"""CorrespondenceDataset constructor"""
         super(CorrespondenceDataset, self).__init__()
 
@@ -60,9 +60,9 @@ class CorrespondenceDataset(Dataset):
         # Miscellaneous
         self.thres = self.metadata[benchmark][4] if thres == 'auto' else thres
 
-        
-        if split in ['trn', 'val']:
-            self.transform  = transforms.Compose([transforms.Resize(size=imside, antialias=True),
+        self.use_resize = use_resize
+        if not self.use_resize:
+            self.transform  = transforms.Compose([transforms.Resize(size=imside),
                                                 transforms.ToTensor(),
                                                 transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                     std=[0.229, 0.224, 0.225])
@@ -72,7 +72,6 @@ class CorrespondenceDataset(Dataset):
                                                 transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                     std=[0.229, 0.224, 0.225])
                                                 ])
-        
 
         self.device = device
         self.split = split
@@ -123,7 +122,7 @@ class CorrespondenceDataset(Dataset):
         sample['trg_imsize'] = torch.tensor(trg_pil.size).flip(dims=(0,))
 
 
-        if self.split in ['test']:
+        if self.use_resize:
             sample['src_img'], sample['src_ratio']  = self.resize(sample['src_img'].unsqueeze(0))
             sample['trg_img'], sample['trg_ratio']  = self.resize(sample['trg_img'].unsqueeze(0))
         else:
