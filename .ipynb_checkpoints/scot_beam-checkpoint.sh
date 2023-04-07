@@ -15,7 +15,7 @@ python train.py \
     --lr 0.005 \
     --momentum 0.9 \
     --epochs 1 \
-    --batch_size 14 \
+    --batch_size 1 \
     --optimizer 'sgd' \
     --exp1 1.0 \
     --exp2 0.5 \
@@ -28,7 +28,7 @@ python train.py \
     --split "trn" \
     --use_pretrained True \
     --pretrained_path "/scratch/students/2023-spring-sp-xugao/SCOT/backbone/ckp_r50.pt"
-    #     # --selfsup "dino" 
+    # #     # --selfsup "dino" 
     # --run_id "uau60b8q" \
     # --logpath "logs/_0402_080338.log" \
     # --start_epoch 101

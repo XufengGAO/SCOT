@@ -254,7 +254,7 @@ def test(model, dataloader, args):
 
     model.eval()
     average_meter = AverageMeter(dataloader.dataset.benchmark, dataloader.dataset.cls)
-
+    zero_pcks = []
     for step, batch in enumerate(dataloader):
         batch['src_img'] = batch['src_img'].to(device)
         batch['trg_img'] = batch['trg_img'].to(device)
@@ -282,10 +282,13 @@ def test(model, dataloader, args):
         batch['src_kps'] = batch['src_kps'].to(device)
 
         prd_kps = geometry.predict_test_kps(src_box, trg_box, batch['src_kps'][0], votes_geo[0])
-        average_meter.eval_pck(prd_kps, batch, args.alpha)
+        pair_pck = average_meter.eval_pck(prd_kps, batch, args.alpha)
+        
+        if pair_pck==0:
+            zero_pcks.append("%s_%s"%(batch['src_imname'], batch['trg_imname']))
+            print("%s_%s"%(batch['src_imname'], batch['trg_imname']))
 
     avg_pck =  average_meter.log_pck()
-
     return avg_pck
 
 if __name__ == "__main__":
@@ -447,7 +450,7 @@ if __name__ == "__main__":
         val_dl = DataLoader(dataset=val_ds, batch_size=1, num_workers=num_workers, pin_memory=pin_memory)
     
     test_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "test", args.cam, img_side=300, use_resize=True, use_batch=False)
-    test_dl = DataLoader(dataset=test_ds, batch_size=1, num_workers=0, pin_memory=pin_memory)
+    test_dl = DataLoader(dataset=test_ds, batch_size=1, num_workers=num_workers, pin_memory=pin_memory)
 
     scheduler = None
     if args.use_scheduler:

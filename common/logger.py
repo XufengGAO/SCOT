@@ -154,6 +154,8 @@ class AverageMeter:
         if self.eval_buf['cls_pck'].get(data['pair_class'][0]) is None:
             self.eval_buf['cls_pck'][data['pair_class'][0]] = []
         self.eval_buf['cls_pck'][data['pair_class'][0]].append(pair_pck)
+        
+        return pair_pck
 
     def log_pck(self):
         r"""Log percentage of correct key-points (PCK)"""
