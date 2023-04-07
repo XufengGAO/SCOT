@@ -131,8 +131,8 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
         loss_dict = {"sim":0, "votes":1, "votes_geo":2}
         idx = loss_dict[args.loss_stage]
 
-        # loss = strategy.compute_loss(model_outputs[idx], eval_result_list[idx], batch, feat_size[0])
-        loss = torch.tensor([0]).to(device)
+        loss = strategy.compute_loss(model_outputs[idx], eval_result_list[idx], batch, feat_size[0])
+        # loss = torch.tensor([0]).to(device)
         if training:
             loss.backward()
             if args.use_grad_clip:
@@ -442,12 +442,12 @@ if __name__ == "__main__":
     num_workers = 16 if torch.cuda.is_available() else 8
     pin_memory = True if torch.cuda.is_available() else False
     
-    trn_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, args.split, args.cam, img_side=(256, 256), use_resize=True, use_batch=True)
-    trn_dl = DataLoader(dataset=trn_ds, batch_size=1, shuffle=True, num_workers=num_workers, pin_memory=pin_memory)
+    trn_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, args.split, args.cam, img_side=(200,300), use_resize=True, use_batch=True)
+    trn_dl = DataLoader(dataset=trn_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory)
     
     if args.split != "val":
-        val_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "val", args.cam, img_side=(256, 256), use_resize=True, use_batch=True)
-        val_dl = DataLoader(dataset=val_ds, batch_size=1, num_workers=num_workers, pin_memory=pin_memory)
+        val_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "val", args.cam, img_side=(200,300), use_resize=True, use_batch=True)
+        val_dl = DataLoader(dataset=val_ds, batch_size=args.batch_size, num_workers=num_workers, pin_memory=pin_memory)
     
     test_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "val", args.cam, img_side=(200,300), use_resize=True, use_batch=False)
     test_dl = DataLoader(dataset=test_ds, batch_size=1, num_workers=num_workers, pin_memory=pin_memory)
@@ -476,13 +476,13 @@ if __name__ == "__main__":
 #         log_benchmark["trn_pck_votes_geo"] = trn_pck['votes_geo']
         
 #         # validation
-#         if args.split != "val":
-#             with torch.no_grad():
-#                 val_loss, val_pck = train(epoch, model, val_dl, strategy, optimizer, training=False, args=args)
-#                 log_benchmark["val_loss"] = val_loss
-#                 log_benchmark["val_pck_sim"] = val_pck['sim']
-#                 log_benchmark["val_pck_votes"] = val_pck['votes']
-#                 log_benchmark["val_pck_votes_geo"] = val_pck['votes_geo']
+        if args.split != "val":
+            with torch.no_grad():
+                val_loss, val_pck = train(epoch, model, test_dl, strategy, optimizer, training=False, args=args)
+                log_benchmark["val_loss"] = val_loss
+                log_benchmark["val_pck_sim"] = val_pck['sim']
+                log_benchmark["val_pck_votes"] = val_pck['votes']
+                log_benchmark["val_pck_votes_geo"] = val_pck['votes_geo']
 
 #         # save the best model
 #         if args.split in ['old_trn', 'trn']:
