@@ -45,7 +45,7 @@ class Objective:
 
     @classmethod
     def cross_entropy(cls, correlation_matrix, src_match, trg_match):
-        r"""Cross-entropy between predicted pdf and ground-truth pdf (one-hot vector)"""
+        r"""Cross-entropy between predicted pdf and ground-truth pdf (one-hot vector)"""        
         pdf = cls.softmax(correlation_matrix.index_select(0, src_match))
         # print("pdf", pdf.size(), trg_match)
         prob = pdf[range(len(trg_match)), trg_match.long()]

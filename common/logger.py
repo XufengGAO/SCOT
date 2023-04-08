@@ -26,6 +26,10 @@ class Logger:
                     
                 # if args.selfsup in ['dino', 'denseCL']:
                 logpath = logpath + "_%s_%s"%(args.selfsup, args.backbone)
+                
+                if args.batch_size == 1:
+                    logpath = logpath + "_b1"
+                    
 
                 cls.logpath = os.path.join('logs', logpath + '.log')
                 os.makedirs(cls.logpath, exist_ok=True)

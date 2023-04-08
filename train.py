@@ -23,7 +23,15 @@ from model.base.geometry import Geometry
 
 # wandb.login()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+img_side = 300
+if isinstance(img_side, int):
+    # use trg_center if only scale the max_side
+    trg_cen = True
+else:
+    trg_cen = False
+use_batch = False
+    
+    
 def find_knn(db_vectors, qr_vectors):
     r"""Finds K-nearest neighbors (Euclidean distance)"""
     # print("knn", db_vectors.unsqueeze(1).size(), qr_vectors.size())
@@ -40,13 +48,13 @@ def find_knn(db_vectors, qr_vectors):
     # print("nea_idx", nearest_idx.size())
     return nearest_idx
 
-def match_idx(kpss, n_ptss):
+def match_idx(kpss, n_ptss, rf_center):
     r"""Samples the nearst feature (receptive field) indices"""
     max_pts = 40
     batch = len(kpss)
     nearest_idxs = torch.zeros((batch, max_pts), dtype=torch.int32).to(device)
     for idx, (kps, n_pts) in enumerate(zip(kpss, n_ptss)):
-        nearest_idx = find_knn(Geometry.rf_center, kps[:,:n_pts].t())
+        nearest_idx = find_knn(rf_center, kps[:,:n_pts].t())
         nearest_idxs[idx, :n_pts] = nearest_idx
         # nearest_idxs.append(nearest_idx.unsqueeze(0))
     # nearest_idxs = torch.cat(nearest_idxs, dim=0)
@@ -77,7 +85,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
             batch["src_mask"] = None
             batch["trg_mask"] = None
 
-        sim, votes, votes_geo, src_box, trg_box, feat_size = model(
+        sim, votes, votes_geo, src_box, trg_box, feat_size, src_center, trg_center = model(
             src_img,
             trg_img,
             args.sim,
@@ -88,7 +96,8 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
             batch["src_mask"],
             batch["trg_mask"],
             args.backbone,
-            training
+            training,
+            trg_cen
         )
 
         # print(sim.size(), votes.size(), votes_geo.size(), src_box.size(), trg_box.size())
@@ -104,8 +113,11 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
             batch['pckthres'] = batch['pckthres'].to(device)
             
             # for cross-entropy loss
-            batch['src_kpidx'] = match_idx(batch['src_kps'], batch['n_pts'])
-            batch['trg_kpidx'] = match_idx(batch['trg_kps'], batch['n_pts'])
+            batch['src_kpidx'] = match_idx(batch['src_kps'], batch['n_pts'], src_center)
+            if trg_cen: # use trg_center
+                batch['trg_kpidx'] = match_idx(batch['trg_kps'], batch['n_pts'], trg_center)
+            else:
+                batch['trg_kpidx'] = match_idx(batch['trg_kps'], batch['n_pts'], src_center)
 
             if args.supervision == "flow":
                 batch['flow'] = Geometry.KpsToFlow(batch['src_kps'], batch['trg_kps'], batch['n_pts'])
@@ -287,7 +299,7 @@ def test(model, dataloader, args):
 
 if __name__ == "__main__":
     
-
+    os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
     # Arguments parsing
     # fmt: off
     parser = argparse.ArgumentParser(description="SCOT Training Script")
@@ -410,6 +422,8 @@ if __name__ == "__main__":
             wandb_name += "_%s"%(args.scheduler)
         if args.optimizer == "sgd":
             wandb_name = wandb_name + "_m%.2f"%(args.momentum)
+        if trg_cen:
+            wandb_name = wandb_name + "b1"
             
         # if args.selfsup in ['dino', 'denseCL']:
         wandb_name = wandb_name + "_%s_%s"%(args.selfsup, args.backbone)
@@ -443,8 +457,7 @@ if __name__ == "__main__":
     num_workers = 16 if torch.cuda.is_available() else 8
     pin_memory = True if torch.cuda.is_available() else False
     
-    img_side = 300
-    use_batch = False
+    
     
     trn_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, args.split, args.cam, img_side=img_side, use_resize=True, use_batch=use_batch)
     trn_dl = DataLoader(dataset=trn_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory)
