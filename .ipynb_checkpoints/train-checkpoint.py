@@ -53,7 +53,7 @@ def match_idx(kpss, n_ptss):
 
     return nearest_idxs
 
-def train(epoch, model, dataloader, strategy, optimizer, training, args, scheduler=None):
+def train(epoch, model, dataloader, strategy, optimizer, training, args):
     r"""Code for training SCOT"""
     if training:
         model.train()
@@ -138,9 +138,6 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args, schedul
             if args.use_grad_clip:
                 torch.nn.utils.clip_grad.clip_grad_value_(model.parameters(), args.grad_clip)
             optimizer.step()
-            if args.use_scheduler:
-                lrs.append(utils.get_lr(optimizer))
-                scheduler.step() # update lr batch-by-batch
 
         # log pck, loss
         average_meter.update(
@@ -290,7 +287,7 @@ def test(model, dataloader, args):
 
 if __name__ == "__main__":
     
-    torch.cuda.empty_cache()
+
     # Arguments parsing
     # fmt: off
     parser = argparse.ArgumentParser(description="SCOT Training Script")
@@ -316,7 +313,10 @@ if __name__ == "__main__":
     parser.add_argument('--weight_decay', type=float, default=0.00,help='weight decay (default: 0.00)')
     parser.add_argument('--momentum', type=float, default=0.9,help='momentum (default: 0.9)')
     parser.add_argument("--use_scheduler", type=util.boolean_string, nargs="?", default=False)
-    parser.add_argument("--scheduler", type=str, default="cycle", choices=["cycle", "cosine"])
+    parser.add_argument("--scheduler", type=str, default="cycle", choices=["step", "cycle", "cosine"])
+    parser.add_argument('--step_size', type=int, default=16)
+    parser.add_argument('--step_gamma', type=float, default=0.1)
+    
     parser.add_argument("--use_grad_clip", type=util.boolean_string, nargs="?", default=False)
     parser.add_argument("--grad_clip", type=float, default=0.1) 
     parser.add_argument("--use_wandb", type= utils.boolean_string, nargs="?", default=False)
@@ -406,6 +406,8 @@ if __name__ == "__main__":
 
     if args.use_wandb:
         wandb_name = "%.e_%s_%s_%s"%(args.lr, args.loss_stage, args.supervision, args.optimizer)
+        if args.use_scheduler:
+            wandb_name += "_%s"%(args.scheduler)
         if args.optimizer == "sgd":
             wandb_name = wandb_name + "_m%.2f"%(args.momentum)
             
@@ -453,9 +455,11 @@ if __name__ == "__main__":
 
     scheduler = None
     if args.use_scheduler:
-        assert args.scheduler in ["cycle", "step"], "Unrecognized model type" 
+        assert args.scheduler in ["cycle", "step", "cosin"], "Unrecognized model type" 
         if args.scheduler == "cycle":
             scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, args.lr, epochs=args.epochs, steps_per_epoch=len(trn_dl))
+        elif args.scheduler == "step":
+            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.step_gamma)
 
     # 6. Evaluator
     Evaluator.initialize(args.alpha)
@@ -468,13 +472,13 @@ if __name__ == "__main__":
     for epoch in range(args.start_epoch, args.epochs):
 
         # training
-        trn_loss, trn_pck = train(epoch, model, trn_dl, strategy, optimizer, training=True, args=args, scheduler=scheduler)
+        trn_loss, trn_pck = train(epoch, model, trn_dl, strategy, optimizer, training=True, args=args)
         log_benchmark["trn_loss"] = trn_loss
         log_benchmark["trn_pck_sim"] = trn_pck['sim']
         log_benchmark["trn_pck_votes"] = trn_pck['votes']
         log_benchmark["trn_pck_votes_geo"] = trn_pck['votes_geo']
         
-         # validation
+        # validation
         if args.split != "val":
             with torch.no_grad():
                 val_loss, val_pck = train(epoch, model, val_dl, strategy, optimizer, training=False, args=args)
@@ -482,6 +486,11 @@ if __name__ == "__main__":
                 log_benchmark["val_pck_sim"] = val_pck['sim']
                 log_benchmark["val_pck_votes"] = val_pck['votes']
                 log_benchmark["val_pck_votes_geo"] = val_pck['votes_geo']
+                
+        if args.use_scheduler:
+                # lrs.append(utils.get_lr(optimizer))
+                scheduler.step() # update lr batch-by-batch
+                log_benchmark["lr"] = scheduler.get_last_lr()[0]
 
         # save the best model
         if args.split in ['old_trn', 'trn']:
