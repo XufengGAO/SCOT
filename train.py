@@ -443,14 +443,17 @@ if __name__ == "__main__":
     num_workers = 16 if torch.cuda.is_available() else 8
     pin_memory = True if torch.cuda.is_available() else False
     
-    trn_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, args.split, args.cam, img_side=(200,300), use_resize=True, use_batch=True)
+    img_side = 300
+    use_batch = False
+    
+    trn_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, args.split, args.cam, img_side=img_side, use_resize=True, use_batch=use_batch)
     trn_dl = DataLoader(dataset=trn_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory)
     
     if args.split != "val":
-        val_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "val", args.cam, img_side=(200,300), use_resize=True, use_batch=True)
+        val_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "val", args.cam, img_side=img_side, use_resize=True, use_batch=use_batch)
         val_dl = DataLoader(dataset=val_ds, batch_size=args.batch_size, num_workers=num_workers, pin_memory=pin_memory)
     
-    test_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "test", args.cam, img_side=(200,300), use_resize=True, use_batch=False)
+    test_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "test", args.cam, img_side=img_side, use_resize=True, use_batch=False)
     test_dl = DataLoader(dataset=test_ds, batch_size=1, num_workers=num_workers, pin_memory=pin_memory)
 
     scheduler = None

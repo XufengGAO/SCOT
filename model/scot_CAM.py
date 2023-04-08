@@ -15,7 +15,7 @@ import numpy as np
 
 class SCOT_CAM(nn.Module):
     r"""SCOT framework"""
-    def __init__(self, backbone, hyperpixel_ids, benchmark, device, cam, use_xavier=False, weight_thres=0.05, select_all=0.85):
+    def __init__(self, backbone, hyperpixel_ids, benchmark, device, cam="", use_xavier=False, weight_thres=0.05, select_all=0.85):
         r"""Constructor for SCOT framework"""
         super(SCOT_CAM, self).__init__()
 
@@ -104,6 +104,13 @@ class SCOT_CAM(nn.Module):
 
         return sim, votes, votes_geo, src_hyperpixels[0], trg_hyperpixels[0], self.feat_size
 
+    def extract_cam(self, img, backbone='resnet101'):
+        self.hyperpixel_ids = []
+        feat_map, fc = self.extract_intermediate_feat(img, return_hp=False, backbone=backbone)
+        mask = self.get_CAM_multi2(img, feat_map, fc, sz=(img.size(2),img.size(3)), top_k=2)
+        print(mask.size(), torch.max(mask), torch.min(mask))
+
+        return mask
 
     def extract_hyperpixel(self, img, classmap, mask, backbone="resnet101"):
         r"""Given image, extract desired list of hyperpixels \
