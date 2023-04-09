@@ -12,7 +12,7 @@ from PIL import Image
 
 class PFPascalDataset(CorrespondenceDataset):
     r"""Inherits CorrespondenceDataset"""
-    def __init__(self, benchmark, datapath, thres, device, split, cam, imside=(256,256), use_resize=False, use_batch=False):
+    def __init__(self, benchmark, datapath, thres, device, split, cam, imside=(200,300), use_resize=False, use_batch=False):
         r"""PF-PASCAL dataset constructor"""
         super(PFPascalDataset, self).__init__(benchmark, datapath, thres, device, split, imside, use_resize, use_batch)
 
@@ -104,7 +104,7 @@ class PFPascalDataset(CorrespondenceDataset):
             sample['trg_intratio'] = torch.tensor((1.0, 1.0))
 
 
-        sample['src_imsize'] = torch.tensor(sample['src_img'].size()) # size, CxHxW
+        sample['src_imsize'] = torch.tensor(sample['src_img'].size()) # rescaled size, CxHxW
         sample['trg_imsize'] = torch.tensor(sample['trg_img'].size())
 
         sample['pckthres'] = self.get_pckthres(sample) # rescaled pckthres
@@ -122,11 +122,11 @@ class PFPascalDataset(CorrespondenceDataset):
             sample['trg_kps'] = self.pad_kps(sample['trg_kps'], sample['n_pts'])
 
         return sample
-    
-    def pad_kps(self, kps, n_pts):
-        pad_pts = torch.zeros((2, self.max_pts - n_pts)) - 100 # pad (-1, -1)
-        kps = torch.cat([kps, pad_pts], dim=1)
-        return kps
+
+    def pad_kps(self, sample):
+        r"""Compute PCK threshold"""
+        return super(PFPascalDataset, self).pad_kps(sample)
+
     
     def horizontal_flip(self, sample):
         tmp = sample['src_bbox'][0].clone()

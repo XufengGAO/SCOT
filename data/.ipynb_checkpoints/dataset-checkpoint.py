@@ -147,7 +147,12 @@ class CorrespondenceDataset(Dataset):
     def get_points(self, pts, idx):
         r"""Returns key-points of an image"""
         return pts[idx], pts[idx].size()[1]
-
+    
+    def pad_kps(self, kps, n_pts):
+        pad_pts = torch.zeros((2, self.max_pts - n_pts)) - 100 # pad (-1, -1)
+        kps = torch.cat([kps, pad_pts], dim=1)
+        return kps
+    
     def resize(self, img, kps):
         r"""Resize given image with imsize: (1, 3, H, W)"""
         imsize = torch.tensor(img.size()).float()
