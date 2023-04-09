@@ -74,6 +74,12 @@ class PFPascalDataset(CorrespondenceDataset):
 
         # print(sample['src_bbox'], sample['trg_bbox'])
         
+        src_mask = self.get_mask(self.src_imnames, idx)# only possible when cam exists
+        trg_mask = self.get_mask(self.trg_imnames, idx)
+        if src_mask is not None and trg_mask is not None:
+            sample['src_mask'] = src_mask
+            sample['trg_mask'] = trg_mask
+            
         # Horizontal flip of key-points when training (no training in HyperpixelFlow)
         if self.split == 'trn' and self.flip[idx]: # width - current x-axis
             # sample['src_kps'][0] = sample['src_img'].size()[2] - sample['src_kps'][0]
@@ -83,11 +89,7 @@ class PFPascalDataset(CorrespondenceDataset):
         else:
             sample['flip'] = 0
 
-        src_mask = self.get_mask(self.src_imnames, idx)# only possible when cam exists
-        trg_mask = self.get_mask(self.trg_imnames, idx)
-        if src_mask is not None and trg_mask is not None:
-            sample['src_mask'] = src_mask
-            sample['trg_mask'] = trg_mask
+
 
         # resize all things
         if self.use_resize:

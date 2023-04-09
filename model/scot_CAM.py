@@ -112,7 +112,7 @@ class SCOT_CAM(nn.Module):
         self.hyperpixel_ids = []
         feat_map, fc = self.extract_intermediate_feat(img, return_hp=False, backbone=backbone)
         mask = self.get_CAM_multi2(img, feat_map, fc, sz=(img.size(2),img.size(3)), top_k=2)
-        print(mask.size(), torch.max(mask), torch.min(mask))
+        # print(mask.size(), torch.max(mask), torch.min(mask))
 
         return mask
 

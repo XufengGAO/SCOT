@@ -25,10 +25,11 @@ class Logger:
                     logpath = logpath + "_%s"%(args.scheduler)
                     
                 # if args.selfsup in ['dino', 'denseCL']:
-                logpath = logpath + "_%s_%s"%(args.selfsup, args.backbone)
+                logpath = logpath + "_%s_%s_%s"%(args.selfsup, args.backbone, args.split)
                 
                 if args.batch_size == 1:
                     logpath = logpath + "_b1"
+                
                     
 
                 cls.logpath = os.path.join('logs', logpath + '.log')

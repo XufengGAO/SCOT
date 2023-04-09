@@ -273,7 +273,7 @@ def test(model, dataloader, args):
             src_mask = None
             trg_mask = None
 
-        sim, votes, votes_geo, src_box, trg_box, _ = model(
+        sim, votes, votes_geo, src_box, trg_box, _,_,_ = model(
             batch['src_img'],
             batch['trg_img'],
             args.sim,
@@ -284,7 +284,7 @@ def test(model, dataloader, args):
             src_mask,
             trg_mask,
             args.backbone,
-            training=False
+            training=False,
         )
         batch['src_kps'] = batch['src_kps'].to(device)
 
@@ -423,10 +423,10 @@ if __name__ == "__main__":
         if args.optimizer == "sgd":
             wandb_name = wandb_name + "_m%.2f"%(args.momentum)
         if trg_cen:
-            wandb_name = wandb_name + "b1"
+            wandb_name = wandb_name + "_b1"
             
         # if args.selfsup in ['dino', 'denseCL']:
-        wandb_name = wandb_name + "_%s_%s"%(args.selfsup, args.backbone)
+        wandb_name = wandb_name + "_%s_%s_%s"%(args.selfsup, args.backbone, args.split)
 
         run = wandb.init(project="new SCOT", config=args, id=args.run_id, resume="allow", name=wandb_name)
         # wandb.watch(model.learner, log="all", log_freq=100)
