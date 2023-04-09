@@ -20,16 +20,10 @@ import torch.optim as optim
 from pprint import pprint
 import wandb
 from model.base.geometry import Geometry
-
+from model import util
 # wandb.login()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-img_side = 300
-if isinstance(img_side, int):
-    # use trg_center if only scale the max_side
-    trg_cen = True
-else:
-    trg_cen = False
-use_batch = False
+
     
     
 def find_knn(db_vectors, qr_vectors):
@@ -85,6 +79,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
             batch["src_mask"] = None
             batch["trg_mask"] = None
 
+        print("forward pass")
         sim, votes, votes_geo, src_box, trg_box, feat_size, src_center, trg_center = model(
             src_img,
             trg_img,
@@ -114,7 +109,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
             
             # for cross-entropy loss
             batch['src_kpidx'] = match_idx(batch['src_kps'], batch['n_pts'], src_center)
-            if trg_cen: # use trg_center
+            if args.trg_cen: # use trg_center
                 batch['trg_kpidx'] = match_idx(batch['trg_kps'], batch['n_pts'], trg_center)
             else:
                 batch['trg_kpidx'] = match_idx(batch['trg_kps'], batch['n_pts'], src_center)
@@ -159,8 +154,8 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
         )
         
         # log batch loss, batch pck    
-        if training and (step % 60 == 0):
-            average_meter.write_process(step, len(dataloader), epoch)
+        # if training and (step % 60 == 0):
+        average_meter.write_process(step, len(dataloader), epoch)
 
         # log running step loss 
         if training and args.use_wandb and (step % 100 == 0):
@@ -339,6 +334,10 @@ if __name__ == "__main__":
     parser.add_argument('--backbone_path', type=str, default='./backbone')
     parser.add_argument('--weight_thres', type=float, default=0.05,help='weight_thres (default: 0.05)')
     parser.add_argument('--select_all', type=float, default=0.85,help='selec all probability (default: 1.0)')
+    
+    parser.add_argument('--img_side', type=str, default='(300)')
+    parser.add_argument("--use_batch", type= utils.boolean_string, nargs="?", default=False)
+    parser.add_argument("--trg_cen", type= utils.boolean_string, nargs="?", default=False)
 
     # Algorithm parameters
     parser.add_argument('--sim', type=str, default='OTGeo', help='Similarity type: OT, OTGeo, cos, cosGeo')
@@ -350,6 +349,7 @@ if __name__ == "__main__":
     # default is the value that the attribute gets when the argument is absent. const is the value it gets when given.
 
     parser.add_argument('--run_id', type=str, default='', help='run_id')
+    parser.add_argument('--wandb_proj', type=str, default='', help='new SCOT')
 
     args = parser.parse_args()
 
@@ -360,6 +360,13 @@ if __name__ == "__main__":
     if args.use_wandb and args.run_id == '':
         args.run_id = wandb.util.generate_id()
 
+    img_side = util.parse_string(args.img_side)
+    if isinstance(img_side, int):
+        # use trg_center if only scale the max_side
+        args.trg_cen = True
+    else:
+        args.trg_cen = False
+        
     Logger.initialize(args)
     
     # fmt: on
@@ -422,13 +429,13 @@ if __name__ == "__main__":
             wandb_name += "_%s"%(args.scheduler)
         if args.optimizer == "sgd":
             wandb_name = wandb_name + "_m%.2f"%(args.momentum)
-        if trg_cen:
+        if args.trg_cen:
             wandb_name = wandb_name + "_b1"
             
         # if args.selfsup in ['dino', 'denseCL']:
         wandb_name = wandb_name + "_%s_%s_%s"%(args.selfsup, args.backbone, args.split)
 
-        run = wandb.init(project="new SCOT", config=args, id=args.run_id, resume="allow", name=wandb_name)
+        run = wandb.init(project=args.wandb_proj, config=args, id=args.run_id, resume="allow", name=wandb_name)
         # wandb.watch(model.learner, log="all", log_freq=100)
         wandb.define_metric("iters")
         wandb.define_metric("grad_ratio", step_metric="iters")
@@ -457,17 +464,19 @@ if __name__ == "__main__":
     num_workers = 16 if torch.cuda.is_available() else 8
     pin_memory = True if torch.cuda.is_available() else False
     
-    
-    
-    trn_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, args.split, args.cam, img_side=img_side, use_resize=True, use_batch=use_batch)
+    print("loading")
+    trn_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, args.split, args.cam, img_side=img_side, use_resize=True, use_batch=args.use_batch)
     trn_dl = DataLoader(dataset=trn_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory)
+    print("loading finished")
+    
     
     if args.split != "val":
-        val_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "val", args.cam, img_side=img_side, use_resize=True, use_batch=use_batch)
+        val_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "val", args.cam, img_side=img_side, use_resize=True, use_batch=args.use_batch)
         val_dl = DataLoader(dataset=val_ds, batch_size=args.batch_size, num_workers=num_workers, pin_memory=pin_memory)
     
-    test_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "test", args.cam, img_side=img_side, use_resize=True, use_batch=False)
-    test_dl = DataLoader(dataset=test_ds, batch_size=1, num_workers=num_workers, pin_memory=pin_memory)
+    if args.benchmark in ['pfpascal']:
+        test_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "test", args.cam, img_side=img_side, use_resize=True, use_batch=False)
+        test_dl = DataLoader(dataset=test_ds, batch_size=1, num_workers=num_workers, pin_memory=pin_memory)
 
     scheduler = None
     if args.use_scheduler:
@@ -485,6 +494,7 @@ if __name__ == "__main__":
     log_benchmark = {}
     print("Training Start")
     train_started = time.time()
+
     for epoch in range(args.start_epoch, args.epochs):
 
         # training
@@ -521,9 +531,10 @@ if __name__ == "__main__":
             Logger.save_model(model, epoch, best_val_pck, old_best_val_pck)
 
         # testing
-        with torch.no_grad():
-            test_pck = test(model, test_dl, args)
-            log_benchmark["test_pck"] = test_pck
+        if args.benchmark in ['pfpascal']:
+            with torch.no_grad():
+                test_pck = test(model, test_dl, args)
+                log_benchmark["test_pck"] = test_pck
 
         if args.use_wandb:
             wandb.log({'epochs':epoch})

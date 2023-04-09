@@ -149,7 +149,8 @@ class PFPascalDataset(CorrespondenceDataset):
         img_name = os.path.join(self.img_path, img_names[idx])
         mask_name = img_name.replace('/JPEGImages', '-'+self.cam) # TODO: prepared cam folder
         if os.path.exists(mask_name):
-            mask = np.array(Image.open(mask_name)) # WxH
+            # mask = np.array(Image.open(mask_name)) # WxH
+            mask = torch.load(mask_name)
         else:
             #print(img_name,mask_name)
             mask = None

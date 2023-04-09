@@ -9,6 +9,7 @@ from model import scot_CAM, util
 from data.mask import MaskDataset
 import torchvision.transforms as T
 from PIL import Image
+from tqdm import tqdm
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -56,9 +57,9 @@ if __name__ == "__main__":
     mask_dl = DataLoader(dataset=mask_ds, batch_size=1, num_workers=1, pin_memory=pin_memory)
 
     transform = T.ToPILImage()
-    folder = os.path.join("./mask", args.backbone,'200_300')
+    folder = os.path.join("./Datasets_SCOT/PF-PASCAL/mask", args.backbone,'200_300')
     os.makedirs(folder, exist_ok=True)
-    for step, batch in enumerate(mask_dl):
+    for step, batch in tqdm(enumerate(mask_dl)):
         img_imname, src_img = batch['img_imname'], batch['src_img'].to(device)
         # print(src_img.size())
         mask = model.extract_cam(src_img, args.backbone)

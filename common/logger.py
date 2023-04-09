@@ -17,7 +17,7 @@ class Logger:
         logtime = datetime.datetime.now().__format__('_%m%d_%H%M%S')
         if training:
             if args.logpath == "":
-                logpath = "%.e_%s_%s_%s"%(args.lr, args.loss_stage, args.supervision, args.optimizer)
+                logpath = "%.e_%s_%s"%(args.lr, args.loss_stage, args.optimizer)
                 
                 if args.optimizer == "sgd":
                     logpath = logpath + "_m%.2f"%(args.momentum)
@@ -25,14 +25,12 @@ class Logger:
                     logpath = logpath + "_%s"%(args.scheduler)
                     
                 # if args.selfsup in ['dino', 'denseCL']:
-                logpath = logpath + "_%s_%s_%s"%(args.selfsup, args.backbone, args.split)
+                logpath = logpath + "_%s"%(args.split)
                 
                 if args.batch_size == 1:
                     logpath = logpath + "_b1"
                 
-                    
-
-                cls.logpath = os.path.join('logs', logpath + '.log')
+                cls.logpath = os.path.join('logs', args.backbone, args.selfsup, args.supervision, args.benchmark, logpath + '.log')
                 os.makedirs(cls.logpath, exist_ok=True)
                 filemode = 'w'
             else:
@@ -41,7 +39,7 @@ class Logger:
         else:
             logtime = datetime.datetime.now().__format__('_%m%d_%H%M%S')
             logpath = args.logpath
-            cls.logpath = os.path.join('logs', logpath + logtime + '.log')
+            cls.logpath = os.path.join('logs', args.backbone, args.selfsup, args.supervision, args.benchmark, logpath + logtime + '.log')
             os.makedirs(cls.logpath, exist_ok=True)
             filemode = 'w'
         
