@@ -15,17 +15,21 @@ python train.py \
     --lr 0.001 \
     --momentum 0.9 \
     --epochs 100 \
-    --batch_size 1 \
+    --batch_size 2 \
     --optimizer 'sgd' \
     --exp1 1.0 \
     --exp2 0.5 \
     --classmap 1 \
-    --use_wandb True \
+    --use_wandb False \
     --use_xavier False \
     --use_scheduler False \
     --use_grad_clip False \
     --loss_stage "votes" \
-    --split "trn"
+    --split "trn" \
+    --cam "mask/resnet50/200_300" \
+    --img_side '(200,300)' \
+    --selfsup "dino" 
+
     # --use_pretrained True \
     # --pretrained_path "./logs/3e-03_votes_strong_sgd_m0.90_supervised_resnet101.log/best_model.pt"\
     # --run_id '1j2qjgkr' \

@@ -48,6 +48,7 @@ if __name__ == "__main__":
         args.benchmark,
         device,
     )
+    model.eval()
 
     # 5. Dataset download & initialization
     num_workers = 16 if torch.cuda.is_available() else 8
@@ -57,17 +58,26 @@ if __name__ == "__main__":
     mask_dl = DataLoader(dataset=mask_ds, batch_size=1, num_workers=1, pin_memory=pin_memory)
 
     transform = T.ToPILImage()
-    folder = os.path.join("./Datasets_SCOT/PF-PASCAL/mask", args.backbone,'200_300')
-    os.makedirs(folder, exist_ok=True)
-    for step, batch in tqdm(enumerate(mask_dl)):
-        img_imname, src_img = batch['img_imname'], batch['src_img'].to(device)
-        # print(src_img.size())
-        mask = model.extract_cam(src_img, args.backbone)
-        # img = transform(mask)
-        # img.save()
-        torch.save(mask, os.path.join(folder,'%s.pt'%(img_imname[0][:-4])))
-        # print(mask.size(), img_imname[0][:-4])
-        
+    f0_folder = os.path.join("./Datasets_SCOT/PF-PASCAL/mask", args.backbone,'200_300','f0')
+    os.makedirs(f0_folder, exist_ok=True)
+    f1_folder = os.path.join("./Datasets_SCOT/PF-PASCAL/mask", args.backbone,'200_300','f1')
+    os.makedirs(f1_folder, exist_ok=True)
+
+    with torch.no_grad():
+        for step, batch in tqdm(enumerate(mask_dl)):
+            img_imname, src_img = batch['img_imname'], batch['src_img'].to(device)
+            src_mask = model.extract_cam(src_img, args.backbone)
+            # torch.save(src_mask, os.path.join(f0_folder, '%s.pt'%(img_imname[0][:-4])))
+
+            trg_img = torch.flip(src_img, dims=(3,))
+            trg_mask = model.extract_cam(trg_img, args.backbone) 
+            # torch.save(trg_mask, os.path.join(f1_folder, 'f1', '%s.pt'%(img_imname[0][:-4])))
+            # img = transform(mask)
+            # img.save()
+            print(torch.max(src_mask), torch.max(trg_mask))
+            
+            # print(mask.size(), img_imname[0][:-4])
+            
 
 
 

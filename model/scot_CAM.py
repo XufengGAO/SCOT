@@ -161,14 +161,17 @@ class SCOT_CAM(nn.Module):
                     mask = self.get_FCN_map(img, feat_map, fc, sz=(img.size(2),img.size(3)))
                 else:
                     mask = self.get_CAM_multi(img, feat_map, fc, sz=(img.size(2),img.size(3)), top_k=2)
-                    # for i in range(4):
-                    #     mask0 = self.get_CAM_multi2(img[i].unsqueeze(0), feat_map[i].unsqueeze(0), fc[i].unsqueeze(0), sz=(img.size(2),img.size(3)), top_k=2)
-                    #     print(mask0.size())
-                    #     print(torch.sum(mask[i]-mask0))
-                        # print(torch.max(mask[i]), torch.min(mask[i]))
-                scale = 1.0
-            else:
-                scale = 255.0
+                    # mask = []
+                    # for im, fm, fc in zip(img, feat_map, fc):
+                    #     ms = self.get_CAM_multi2(im.unsqueeze(0), fm.unsqueeze(0), fc.unsqueeze(0), sz=(img.size(2),img.size(3)), top_k=2)
+                    #     mask.append(ms)
+                    # if len(mask) > 1:
+                    #     mask = torch.stack(mask, dim=0)
+                    # else:
+                    #     mask = mask[0].unsqueeze(0)
+
+                    # print(torch.sum((masks- mask)>1e-3))                    
+            scale = 1.0
             
             hpos = geometry.center(hpgeometry) # 4096 2
             # print("hpos", hpos.size(), hpos[:], Geometry.rf_center.size(), Geometry.rf_center[:])
@@ -189,7 +192,7 @@ class SCOT_CAM(nn.Module):
         # print(img.size())
         # print(img.size()[2:][::-1], weights.unsqueeze(-1).size())
 
-        return hpgeometry, hyperfeats, img.size()[2:][::-1], weights.unsqueeze(-1)
+        return hpgeometry, hyperfeats, img.size()[2:][::-1], weights
 
 
     def extract_intermediate_feat(self, img, return_hp=True, backbone='resnet101'):

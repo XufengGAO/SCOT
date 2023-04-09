@@ -79,7 +79,6 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
             batch["src_mask"] = None
             batch["trg_mask"] = None
 
-        print("forward pass")
         sim, votes, votes_geo, src_box, trg_box, feat_size, src_center, trg_center = model(
             src_img,
             trg_img,
@@ -92,7 +91,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
             batch["trg_mask"],
             args.backbone,
             training,
-            trg_cen
+            args.trg_cen
         )
 
         # print(sim.size(), votes.size(), votes_geo.size(), src_box.size(), trg_box.size())
@@ -303,7 +302,7 @@ if __name__ == "__main__":
     parser.add_argument('--datapath', type=str, default='./Datasets_SCOT') 
     parser.add_argument('--benchmark', type=str, default='pfpascal')
     parser.add_argument('--backbone', type=str, default='resnet50')
-    parser.add_argument('--selfsup', type=str, default='supervised', choices=['sup', 'dino', 'denseCL'])
+    parser.add_argument('--selfsup', type=str, default='sup', choices=['sup', 'dino', 'denseCL'])
     parser.add_argument('--thres', type=str, default='auto', choices=['auto', 'img', 'bbox'])
     parser.add_argument('--alpha', type=float, default=0.1)
     parser.add_argument('--logpath', type=str, default='')
@@ -364,8 +363,10 @@ if __name__ == "__main__":
     if isinstance(img_side, int):
         # use trg_center if only scale the max_side
         args.trg_cen = True
+        args.use_batch = False
     else:
         args.trg_cen = False
+        args.use_batch = True
         
     Logger.initialize(args)
     
@@ -409,7 +410,6 @@ if __name__ == "__main__":
 
     # 4. Objective (cross-entropy loss) and Optimizer
     Objective.initialize(target_rate=0.5, alpha=args.alpha)
-
     if args.supervision == "weak":
         strategy = sup.WeakSupStrategy()
     elif args.supervision == "strong":
@@ -467,8 +467,6 @@ if __name__ == "__main__":
     print("loading Dataset")
     trn_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, args.split, args.cam, img_side=img_side, use_resize=True, use_batch=args.use_batch)
     trn_dl = DataLoader(dataset=trn_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory)
-    print("loading finished")
-    
     
     if args.split != "val":
         val_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "val", args.cam, img_side=img_side, use_resize=True, use_batch=args.use_batch)
@@ -477,7 +475,8 @@ if __name__ == "__main__":
     if args.benchmark in ['pfpascal']:
         test_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "test", args.cam, img_side=img_side, use_resize=True, use_batch=False)
         test_dl = DataLoader(dataset=test_ds, batch_size=1, num_workers=num_workers, pin_memory=pin_memory)
-
+    print("loading finished")
+    
     scheduler = None
     if args.use_scheduler:
         assert args.scheduler in ["cycle", "step", "cosin"], "Unrecognized model type" 

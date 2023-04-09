@@ -73,12 +73,6 @@ class PFPascalDataset(CorrespondenceDataset):
         sample['trg_bbox'] = self.trg_bbox[idx]
 
         # print(sample['src_bbox'], sample['trg_bbox'])
-        
-        src_mask = self.get_mask(self.src_imnames, idx)# only possible when cam exists
-        trg_mask = self.get_mask(self.trg_imnames, idx)
-        if src_mask is not None and trg_mask is not None:
-            sample['src_mask'] = src_mask
-            sample['trg_mask'] = trg_mask
             
         # Horizontal flip of key-points when training (no training in HyperpixelFlow)
         if self.split == 'trn' and self.flip[idx]: # width - current x-axis
@@ -89,7 +83,11 @@ class PFPascalDataset(CorrespondenceDataset):
         else:
             sample['flip'] = 0
 
-
+        src_mask = self.get_mask(self.src_imnames, idx, sample['flip'])# only possible when cam exists
+        trg_mask = self.get_mask(self.trg_imnames, idx, sample['flip'])
+        if src_mask is not None and trg_mask is not None:
+            sample['src_mask'] = src_mask
+            sample['trg_mask'] = trg_mask
 
         # resize all things
         if self.use_resize:
@@ -102,7 +100,6 @@ class PFPascalDataset(CorrespondenceDataset):
         else:
             sample['src_intratio'] = torch.tensor((1.0, 1.0)) # ratio, (H,W)
             sample['trg_intratio'] = torch.tensor((1.0, 1.0))
-
 
         sample['src_imsize'] = torch.tensor(sample['src_img'].size()) # rescaled size, CxHxW
         sample['trg_imsize'] = torch.tensor(sample['trg_img'].size())
@@ -123,9 +120,9 @@ class PFPascalDataset(CorrespondenceDataset):
 
         return sample
 
-    def pad_kps(self, sample):
+    def pad_kps(self, kps, n_pts):
         r"""Compute PCK threshold"""
-        return super(PFPascalDataset, self).pad_kps(sample)
+        return super(PFPascalDataset, self).pad_kps(kps, n_pts)
 
     
     def horizontal_flip(self, sample):
@@ -144,10 +141,12 @@ class PFPascalDataset(CorrespondenceDataset):
         sample['trg_img'] = torch.flip(sample['trg_img'], dims=(2,))
    
 
-    def get_mask(self, img_names, idx):
+    def get_mask(self, img_names, idx, flip):
         r"""Return image mask"""
-        img_name = os.path.join(self.img_path, img_names[idx])
-        mask_name = img_name.replace('/JPEGImages', '-'+self.cam) # TODO: prepared cam folder
+        f = 'f1' if flip==1 else 'f0'
+        img_name = os.path.join(self.img_path, f, "%s.pt"%(img_names[idx][:-4]))
+        mask_name = img_name.replace('JPEGImages', self.cam) # TODO: prepared cam folder
+
         if os.path.exists(mask_name):
             # mask = np.array(Image.open(mask_name)) # WxH
             mask = torch.load(mask_name)
