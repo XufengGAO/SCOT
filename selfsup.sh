@@ -10,14 +10,14 @@ python train.py \
     --backbone $backbone \
     --wandb_proj "new SCOT" \
     --selfsup "sup" \
-    --supervision 'warp' \
+    --supervision 'strong' \
     --weight_thres 0.10 \
     --select_all 0.90 \
     --alpha 0.1 \
-    --lr 0.005 \
+    --lr 0.00005 \
     --momentum 0.9 \
     --epochs 150 \
-    --batch_size 2 \
+    --batch_size 15 \
     --optimizer 'sgd' \
     --exp1 1.0 \
     --exp2 0.5 \

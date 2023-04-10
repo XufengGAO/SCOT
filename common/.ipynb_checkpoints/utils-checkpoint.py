@@ -117,6 +117,8 @@ def draw_weight_map(weight, epoch, step, weight_map_path):
     fig.savefig(weight_pth)
     plt.close('all')
     
+    del weight, pad_weight
+    
     return weight_pth
 
 def get_concat_h(im1, im2):

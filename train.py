@@ -54,7 +54,7 @@ def match_idx(kpss, n_ptss, rf_center):
 
 def train(epoch, model, dataloader, strategy, optimizer, training, args):
     r"""Code for training SCOT"""
-    if training == "trn":
+    if training == "train":
         model.train()
     else:
         model.eval()
@@ -144,7 +144,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
             loss = strategy.compute_loss(model_outputs[idx], src_hf, trg_hf, args.supervision)
 
 
-        if training:
+        if training == "train":
             loss.backward()
             if args.use_grad_clip:
                 torch.nn.utils.clip_grad.clip_grad_value_(model.parameters(), args.grad_clip)
@@ -158,11 +158,11 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
         )
         
         # log batch loss, batch pck    
-        if training and (step % 60 == 0):
-            average_meter.write_process(step, len(dataloader), epoch)
+        # if training and (step % 60 == 0):
+        average_meter.write_process(step, len(dataloader), epoch)
 
         # log running step loss 
-        if training and args.use_wandb and (step % 100 == 0):
+        if False and (step % 100 == 0):
             running_avg_loss = utils.mean(average_meter.loss_buffer)
             running_avg_pck_sim = utils.mean(average_meter.buffer['sim']["pck"])
             running_avg_pck_votes = utils.mean(average_meter.buffer['votes']["pck"])
@@ -192,7 +192,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
                     },
                 )
 
-        if training and args.use_wandb and (step % 100 == 0):
+        if (step % 100 == 0):
             # 1. Draw weight map
             weight_map_path = os.path.join(Logger.logpath, "weight_map")
             os.makedirs(weight_map_path, exist_ok=True)
@@ -224,6 +224,8 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
                 color_ids=eval_result_list[2]["pck_ids"][min_pck_idx],
                 draw_match_path=draw_match_path,
             )
+            del min_pck, min_pck_idx
+            
             if args.use_wandb:
                 wandb.log(
                     {
@@ -233,10 +235,10 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
                 )
                 
         del sim, votes, votes_geo, src_box, trg_box, feat_size, src_center, trg_center, src_hf, trg_hf
-        del model_outputs
+        del model_outputs, loss, eval_result_list, prd_kps_list
 
     # 3. Draw class pck
-    if training and args.use_wandb and (epoch % 2)==0:
+    if (epoch % 2)==0:
         draw_class_pck_path = os.path.join(Logger.logpath, "draw_class_pck")
         os.makedirs(draw_class_pck_path, exist_ok=True)
         class_pth = utils.draw_class_pck(
@@ -250,7 +252,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
             )
 
     # log epoch loss, epoch pck
-    average_meter.write_result("Training" if training else "Validation", epoch)
+    average_meter.write_result("Training" if training == "train" else "Validation", epoch)
 
     avg_loss = utils.mean(average_meter.loss_buffer)
     avg_pck = {'sim':0, 'votes':0, 'votes_geo':0}
@@ -508,7 +510,7 @@ if __name__ == "__main__":
     for epoch in range(args.start_epoch, args.epochs):
 
         # training
-        trn_loss, trn_pck = train(epoch, model, trn_dl, strategy, optimizer, training="trn", args=args)
+        trn_loss, trn_pck = train(epoch, model, trn_dl, strategy, optimizer, training="train", args=args)
         log_benchmark["trn_loss"] = trn_loss
         log_benchmark["trn_pck_sim"] = trn_pck['sim']
         log_benchmark["trn_pck_votes"] = trn_pck['votes']

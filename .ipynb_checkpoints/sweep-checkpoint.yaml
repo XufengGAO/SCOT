@@ -1,5 +1,6 @@
 program: train.py
 project: new SCOT
+name: sup_r50
 method: grid
 metric:
   name: val_pck_votes_geo
@@ -18,7 +19,7 @@ parameters:
   # start_epoch:
   #   value: 18
   selfsup:
-    value: "denseCL"
+    value: "sup"
   alpha:
     value: 0.1
   weight_thres:

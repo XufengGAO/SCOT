@@ -35,8 +35,8 @@ class StrongSupStrategy(SupervisionStrategy):
 
     def compute_loss(self, correlation_matrix, eval_result, batch):
         r"""Strongly-supervised matching loss (L_{match})"""
-        easy_match = eval_result[0]['easy_match'] # correct prediction
-        hard_match = eval_result[0]['hard_match'] # incorrect prediction
+        easy_match = eval_result['easy_match'] # correct prediction
+        hard_match = eval_result['hard_match'] # incorrect prediction
 
         loss_cre = Objective.weighted_cross_entropy(correlation_matrix, easy_match, hard_match, batch)
         # loss_sel = Objective.layer_selection_loss(layer_sel)
