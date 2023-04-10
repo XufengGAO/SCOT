@@ -77,12 +77,12 @@ class SCOT_CAM(nn.Module):
 
         self.select_all = select_all
 
-    def forward(self, src_img, trg_img, sim, exp1, exp2, eps, classmap, src_mask, trg_mask, backbone, training=True, trg_cen=False):
+    def forward(self, src_img, trg_img, sim, exp1, exp2, eps, classmap, src_mask, trg_mask, backbone, training="train", trg_cen=False):
         r"""Forward pass"""
 
         # 1. Update the hyperpixel_ids by checking the weights
         prob = torch.rand(1).item()
-        if (prob > self.select_all) and training:
+        if (prob > self.select_all) and training == "trn":
             n_layers = {"resnet50": 17, "resnet101": 34, "fcn101": 34}
             self.hyperpixel_ids = list(range(n_layers[backbone]))
         else:
@@ -102,15 +102,16 @@ class SCOT_CAM(nn.Module):
         sim, votes, votes_geo = rhm_map.rhm(src_hyperpixels, trg_hyperpixels, 
                                             self.hsfilter, sim, exp1, 
                                             exp2, eps)
-        
-        
-        src_center = geometry.center(src_hyperpixels[0])
-        if trg_cen:
-            trg_center = geometry.center(trg_hyperpixels[0])
+        if training == "test":
+            return votes_geo, src_hyperpixels[0], trg_hyperpixels[0]
         else:
-            trg_center = None
-        
-        return sim, votes, votes_geo, src_hyperpixels[0], trg_hyperpixels[0], self.feat_size, src_center, trg_center
+            src_center = geometry.center(src_hyperpixels[0])
+            if trg_cen:
+                trg_center = geometry.center(trg_hyperpixels[0])
+            else:
+                trg_center = None
+            
+            return sim, votes, votes_geo, src_hyperpixels[0], trg_hyperpixels[0], self.feat_size, src_center, trg_center, src_hyperpixels[1].transpose(1,2), trg_hyperpixels[1].transpose(1,2)
 
     def extract_cam(self, img, backbone='resnet101'):
         self.hyperpixel_ids = []

@@ -15,12 +15,12 @@ class Evaluator:
         cls.alpha = alpha
 
     @classmethod
-    def evaluate(cls, prd_kps, batch):
+    def evaluate(cls, prd_kps, batch, supervision):
         r"""Compute evaluation metric"""
-        return cls.eval_func(prd_kps, batch)
+        return cls.eval_func(prd_kps, batch, supervision)
 
     @classmethod
-    def eval_kps_transfer(cls, prd_kps, batch):
+    def eval_kps_transfer(cls, prd_kps, batch, supervision):
         r"""Compute percentage of correct key-points (PCK) based on prediction"""
 
         easy_match = {'src': [], 'trg': [], 'dist': []}
@@ -36,13 +36,14 @@ class Evaluator:
             # pck_ids.append({'correct_ids':correct_ids, 'incorrect_ids':incorrect_ids})
             pck_ids[idx, correct_ids] = 1
             # Collect easy and hard match feature index & store pck to buffer
-            easy_match['dist'].append(correct_dist)
-            # for each keypoint, we find its nearest neighbour of center of receptive field
-            # then kpidx is the id of hyperpixel
-            easy_match['src'].append(batch['src_kpidx'][idx][:npt][correct_ids])
-            easy_match['trg'].append(batch['trg_kpidx'][idx][:npt][correct_ids])
-            hard_match['src'].append(batch['src_kpidx'][idx][:npt][incorrect_ids])
-            hard_match['trg'].append(batch['trg_kpidx'][idx][:npt][incorrect_ids])
+            if supervision == "strong":
+                easy_match['dist'].append(correct_dist)
+                # for each keypoint, we find its nearest neighbour of center of receptive field
+                # then kpidx is the id of hyperpixel
+                easy_match['src'].append(batch['src_kpidx'][idx][:npt][correct_ids])
+                easy_match['trg'].append(batch['trg_kpidx'][idx][:npt][correct_ids])
+                hard_match['src'].append(batch['src_kpidx'][idx][:npt][incorrect_ids])
+                hard_match['trg'].append(batch['trg_kpidx'][idx][:npt][incorrect_ids])
             pck.append(int(ncorrt)/int(npt))
             # print(int(ncorrt)/int(npt))
         

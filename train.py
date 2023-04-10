@@ -9,7 +9,6 @@ import torch
 import time
 from PIL import Image
 from data import download
-from test_data import download as test_download
 from model import scot_CAM, util, geometry, evaluation
 from model.objective import Objective
 from common import supervision as sup
@@ -24,8 +23,6 @@ from model import util
 # wandb.login()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    
-    
 def find_knn(db_vectors, qr_vectors):
     r"""Finds K-nearest neighbors (Euclidean distance)"""
     # print("knn", db_vectors.unsqueeze(1).size(), qr_vectors.size())
@@ -57,7 +54,7 @@ def match_idx(kpss, n_ptss, rf_center):
 
 def train(epoch, model, dataloader, strategy, optimizer, training, args):
     r"""Code for training SCOT"""
-    if training:
+    if training == "trn":
         model.train()
     else:
         model.eval()
@@ -79,7 +76,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
             batch["src_mask"] = None
             batch["trg_mask"] = None
 
-        sim, votes, votes_geo, src_box, trg_box, feat_size, src_center, trg_center = model(
+        sim, votes, votes_geo, src_box, trg_box, feat_size, src_center, trg_center, src_hf, trg_hf = model(
             src_img,
             trg_img,
             args.sim,
@@ -107,12 +104,14 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
             batch['pckthres'] = batch['pckthres'].to(device)
             
             # for cross-entropy loss
-            batch['src_kpidx'] = match_idx(batch['src_kps'], batch['n_pts'], src_center)
-            if args.trg_cen: # use trg_center
-                batch['trg_kpidx'] = match_idx(batch['trg_kps'], batch['n_pts'], trg_center)
-            else:
-                batch['trg_kpidx'] = match_idx(batch['trg_kps'], batch['n_pts'], src_center)
+            if args.supervision == "strong":
+                batch['src_kpidx'] = match_idx(batch['src_kps'], batch['n_pts'], src_center)
+                if args.trg_cen: # use trg_center
+                    batch['trg_kpidx'] = match_idx(batch['trg_kps'], batch['n_pts'], trg_center)
+                else:
+                    batch['trg_kpidx'] = match_idx(batch['trg_kps'], batch['n_pts'], src_center)
 
+            # for flow loss
             if args.supervision == "flow":
                 batch['flow'] = Geometry.KpsToFlow(batch['src_kps'], batch['trg_kps'], batch['n_pts'])
 
@@ -129,7 +128,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
                 ) # [2,2,40]
                 prd_kps_list.append(prd_kps)
 
-                eval_result = Evaluator.evaluate(prd_kps, batch) # return dict results
+                eval_result = Evaluator.evaluate(prd_kps, batch, args.supervision) # return dict results
                 # print(len(eval_result['pck']))
                 eval_result_list.append(eval_result)
         
@@ -137,7 +136,13 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
         loss_dict = {"sim":0, "votes":1, "votes_geo":2}
         idx = loss_dict[args.loss_stage]
 
-        loss = strategy.compute_loss(model_outputs[idx], eval_result_list[idx], batch, feat_size[0])
+        if args.supervision == "strong":
+            loss = strategy.compute_loss(model_outputs[idx], eval_result_list[idx], batch)
+        elif args.supervision == "flow":
+            loss = strategy.compute_loss(model_outputs[idx], batch['flow'].to(device), feat_size)
+        elif args.supervision in ["softwarp", "hardwarp"]:
+            loss = strategy.compute_loss(model_outputs[idx], src_hf, trg_hf, args.supervision)
+
 
         if training:
             loss.backward()
@@ -227,6 +232,9 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
                     }
                 )
                 
+        del sim, votes, votes_geo, src_box, trg_box, feat_size, src_center, trg_center, src_hf, trg_hf
+        del model_outputs
+
     # 3. Draw class pck
     if training and args.use_wandb and (epoch % 2)==0:
         draw_class_pck_path = os.path.join(Logger.logpath, "draw_class_pck")
@@ -267,7 +275,7 @@ def test(model, dataloader, args):
             src_mask = None
             trg_mask = None
 
-        sim, votes, votes_geo, src_box, trg_box, _,_,_ = model(
+        votes_geo, src_box, trg_box = model(
             batch['src_img'],
             batch['trg_img'],
             args.sim,
@@ -278,7 +286,7 @@ def test(model, dataloader, args):
             src_mask,
             trg_mask,
             args.backbone,
-            training=False,
+            training="test",
         )
         batch['src_kps'] = batch['src_kps'].to(device)
 
@@ -309,7 +317,7 @@ if __name__ == "__main__":
     parser.add_argument('--split', type=str, default='trn', help='trn, val, test, old_trn') 
 
     # Training parameters
-    parser.add_argument('--supervision', type=str, default='strong', choices=['weak', 'strong', 'flow'])
+    parser.add_argument('--supervision', type=str, default='strong', choices=['weak', 'strong', 'flow', 'softwarp', 'hardwarp'])
     parser.add_argument('--lr', type=float, default=0.01) 
     parser.add_argument('--lr_backbone', type=float, default=0.0) 
     parser.add_argument('--epochs', type=int, default=50)
@@ -413,8 +421,12 @@ if __name__ == "__main__":
         strategy = sup.WeakSupStrategy()
     elif args.supervision == "strong":
         strategy = sup.StrongSupStrategy()
-    else:
+    elif args.supervision == "flow":
         strategy = sup.EPESupStrategy()
+    elif args.supervision in ["softwarp", "hardwarp"]:
+        strategy = sup.WarpSupStrategy()
+    else:
+        raise ValueError("Unrecognized objective loss")
 
     assert args.optimizer in ["sgd", "adam"], "Unrecognized model type"
     if args.optimizer == "sgd":
@@ -496,7 +508,7 @@ if __name__ == "__main__":
     for epoch in range(args.start_epoch, args.epochs):
 
         # training
-        trn_loss, trn_pck = train(epoch, model, trn_dl, strategy, optimizer, training=True, args=args)
+        trn_loss, trn_pck = train(epoch, model, trn_dl, strategy, optimizer, training="trn", args=args)
         log_benchmark["trn_loss"] = trn_loss
         log_benchmark["trn_pck_sim"] = trn_pck['sim']
         log_benchmark["trn_pck_votes"] = trn_pck['votes']
@@ -505,7 +517,7 @@ if __name__ == "__main__":
         # validation
         if args.split != "val":
             with torch.no_grad():
-                val_loss, val_pck = train(epoch, model, val_dl, strategy, optimizer, training=False, args=args)
+                val_loss, val_pck = train(epoch, model, val_dl, strategy, optimizer, training="val", args=args)
                 log_benchmark["val_loss"] = val_loss
                 log_benchmark["val_pck_sim"] = val_pck['sim']
                 log_benchmark["val_pck_votes"] = val_pck['votes']

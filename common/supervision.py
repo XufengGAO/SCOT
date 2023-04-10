@@ -33,21 +33,40 @@ class StrongSupStrategy(SupervisionStrategy):
         r"""Returns correlation matrices of 'ALL PAIRS' in a batch"""
         return correlation_matrix.detach().clone()
 
-    def compute_loss(self, correlation_matrix, *args):
+    def compute_loss(self, correlation_matrix, eval_result, batch):
         r"""Strongly-supervised matching loss (L_{match})"""
-        easy_match = args[0]['easy_match'] # correct prediction
-        hard_match = args[0]['hard_match'] # incorrect prediction
-        # layer_sel = args[1]
-        batch = args[1]
-
-        # print(layer_sel)
+        easy_match = eval_result[0]['easy_match'] # correct prediction
+        hard_match = eval_result[0]['hard_match'] # incorrect prediction
 
         loss_cre = Objective.weighted_cross_entropy(correlation_matrix, easy_match, hard_match, batch)
         # loss_sel = Objective.layer_selection_loss(layer_sel)
         # loss_net = loss_cre + loss_sel
 
         return loss_cre
+    
+class WarpSupStrategy(SupervisionStrategy):
+    def get_image_pair(self, batch, *args):
+        r"""Returns (semantically related) pairs for strongly-supervised training"""
+        return batch['src_img'].to(device), batch['trg_img'].to(device)
 
+    def get_correlation(self, correlation_matrix):
+        r"""Returns correlation matrices of 'ALL PAIRS' in a batch"""
+        return correlation_matrix.detach().clone()
+
+    def compute_loss(self, correlation_matrix, src_hf, trg_hf, warp):
+        r"""Strongly-supervised matching loss (L_{match})"""
+        if warp == "softwarp":
+            row_softmax = nn.Softmax(dim=2)
+            col_softmax = nn.Softmax(dim=1)
+        else:
+            row_softmax = nn.Identity()
+            col_softmax = nn.Identity()
+        
+        loss_warp = 0.5 * ((torch.bmm(src_hf, col_softmax(correlation_matrix)) - trg_hf).norm(dim=(1,2)).mean() + \
+                (torch.bmm(trg_hf, row_softmax(correlation_matrix).transpose(1,2)) - src_hf).norm(dim=(1,2)).mean())
+        
+
+        return loss_warp
 
 class EPESupStrategy(SupervisionStrategy):
     def get_image_pair(self, batch, *args):
@@ -58,12 +77,9 @@ class EPESupStrategy(SupervisionStrategy):
         r"""Returns correlation matrices of 'ALL PAIRS' in a batch"""
         return correlation_matrix.detach().clone()
 
-    def compute_loss(self, correlation_matrix, *args):
+    def compute_loss(self, correlation_matrix, flow_gt, feat_size):
         r"""Strongly-supervised matching loss (L_{match})"""
         
-        batch = args[1]
-        feat_size = args[2]
-        flow_gt = batch['flow'].to(device)
         B = correlation_matrix.size()[0]
         grid_x, grid_y = soft_argmax(correlation_matrix.view(B, -1, feat_size, feat_size), feature_size=feat_size)
 

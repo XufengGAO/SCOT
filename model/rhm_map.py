@@ -101,8 +101,7 @@ def appearance_similarityOT(src_feats, trg_feats, exp1=1.0, exp2=1.0, eps=0.05, 
 
     sim = correleation / (torch.bmm(src_feat_norms, trg_feat_norms) + 1e-10)
     sim = torch.pow(relu(sim), 1.0) # clamp
-    # print("PI", sim.size(), sim.max())
-    # print("similarity map", sim.size()) # [4, 4096, 4096]
+    # print("sim", sim.size(), sim.max(), sim.min())
 
     #sim = sim*st_weights
     costs = 1-sim
@@ -153,6 +152,7 @@ def appearance_similarityOT(src_feats, trg_feats, exp1=1.0, exp2=1.0, eps=0.05, 
 
     PIs = torch.cat(PIs, dim=0)
     
+    # print("PI", PIs.size(), PIs.max(), PIs.min())
     return PIs, sim
 
 def hspace_bin_ids(src_imsize, src_box, trg_box, hs_cellsize, nbins_x):
@@ -213,11 +213,14 @@ def rhm(src_hyperpixels, trg_hyperpixels, hsfilter, sim, exp1, exp2, eps, ncells
             new_hspace = F.conv2d(new_hspace.view(1, 1, nbins_y, nbins_x),
                             hsfilter.unsqueeze(0).unsqueeze(0), padding=3).view(-1)
 
-            geometric_scores.append((vote * torch.index_select(new_hspace, dim=0, index=bin_ids.view(-1)).view_as(vote)).unsqueeze(0))
+            geometric_scores.append((torch.index_select(new_hspace, dim=0, index=bin_ids.view(-1)).view_as(vote)).unsqueeze(0))
 
         geometric_scores = torch.cat(geometric_scores, dim=0)
-        # print("geometric scores", geometric_scores.size()) # 4x4096x4096
-
+        
+    geometric_scores = votes * geometric_scores
+    
+    #print("geometric scores", geometric_scores.size(), geometric_scores.max(), geometric_scores.min()) # 4x4096x4096
+  
     return sim, votes, geometric_scores
 
 
