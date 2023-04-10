@@ -153,8 +153,8 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
         )
         
         # log batch loss, batch pck    
-        # if training and (step % 60 == 0):
-        average_meter.write_process(step, len(dataloader), epoch)
+        if training and (step % 60 == 0):
+            average_meter.write_process(step, len(dataloader), epoch)
 
         # log running step loss 
         if training and args.use_wandb and (step % 100 == 0):
@@ -354,7 +354,6 @@ if __name__ == "__main__":
 
     if args.selfsup in ['dino', 'denseCL']:
         args.backbone_path = os.path.join(args.backbone_path, "%s_%s.pth"%(args.selfsup, args.backbone))
-        args.classmap = 0
 
     if args.use_wandb and args.run_id == '':
         args.run_id = wandb.util.generate_id()
@@ -429,9 +428,9 @@ if __name__ == "__main__":
             wandb_name += "_%s"%(args.scheduler)
         if args.optimizer == "sgd":
             wandb_name = wandb_name + "_m%.2f"%(args.momentum)
-        if args.trg_cen:
-            wandb_name = wandb_name + "_b1"
-            
+        # if args.trg_cen:
+        wandb_name = wandb_name + "_bsz%d"%(args.batch_size)
+
         # if args.selfsup in ['dino', 'denseCL']:
         wandb_name = wandb_name + "_%s_%s_%s"%(args.selfsup, args.backbone, args.split)
 

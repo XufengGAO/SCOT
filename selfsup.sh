@@ -8,30 +8,33 @@ backbone="resnet50"
 python train.py \
     --benchmark $benchmark \
     --backbone $backbone \
+    --wandb_proj "new SCOT" \
+    --selfsup "dino" \
+    --supervision 'strong' \
     --weight_thres 0.10 \
     --select_all 0.90 \
-    --supervision 'strong'\
     --alpha 0.1 \
-    --lr 0.001 \
+    --lr 0.005 \
     --momentum 0.9 \
-    --epochs 100 \
-    --batch_size 2 \
+    --epochs 150 \
+    --batch_size 15 \
     --optimizer 'sgd' \
     --exp1 1.0 \
     --exp2 0.5 \
     --classmap 1 \
-    --use_wandb False \
+    --use_wandb True \
     --use_xavier False \
     --use_scheduler False \
     --use_grad_clip False \
     --loss_stage "votes" \
     --split "trn" \
     --cam "mask/resnet50/200_300" \
-    --img_side '(200,300)' \
-    --selfsup "dino" 
+    --img_side '(200,300)'
+    
+    
 
     # --use_pretrained True \
-    # --pretrained_path "./logs/3e-03_votes_strong_sgd_m0.90_supervised_resnet101.log/best_model.pt"\
+    # --pretrained_path "./logs/3e-03_votes_strong_sgd_m0.90_supervised_resnet101.log/best_model.pt"
     # --run_id '1j2qjgkr' \
     # --start_epoch 48 \
     # --logpath "./logs/3e-03_votes_strong_sgd_m0.90_supervised_resnet101.log"

@@ -8,7 +8,7 @@ parameters:
   benchmark:
     value: 'pfpascal'
   backbone:
-    value: 'resnet101'
+    value: 'resnet50'
   # use_pretrained:
   #   value: True
   # pretrained_path: 
@@ -17,6 +17,8 @@ parameters:
   #   value: "5h6kghje"
   # start_epoch:
   #   value: 18
+  selfsup:
+    value: "denseCL"
   alpha:
     value: 0.1
   weight_thres:
@@ -24,21 +26,17 @@ parameters:
   select_all:
     value: 0.90
   lr:
-    values: [0.1, 0.01, 0.003, 0.001]
-    # , 0.01, 0.005, 0.003, 0.001
+    values: [0.003, 0.001, 0.0005, 0.0001]
+    # , 0.01, 0.005, 0.003, 0.001 , 0.0003, 0.0001, 0.00001
   epochs:
-    value: 50
+    value: 60
   batch_size:
-    value: 8
+    value: 15
   optimizer:
     value: 'sgd'
   momentum:
-    value: 0.9
+    values: [0.5, 0.95, 0.99, 0.9]
   # 0.001, 0.0001, 0.00001, 0.000001, 0.01 
-  # weight_decay:
-  #   values: [0.005, 0.00001, 0.0001, 0.001, 0.01,0]
-  # weight_decay:
-  #   value: 0.00001
   exp1:
     value: 1.0
   exp2:
@@ -55,12 +53,14 @@ parameters:
     value: False
   split:
     value: "trn"
-  # selfsup:
-  #   value: "denseCL" 
   loss_stage:
     values: ["votes"]
   supervision:
-    values: ["strong"]
+    values: ["strong"] 
+  cam:
+    value: "mask/resnet50/200_300"
+  img_side:
+    value: '(200,300)'
     # , "votes", "votes_geo" "sim", "votes"， 
 
 

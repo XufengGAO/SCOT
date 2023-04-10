@@ -21,24 +21,28 @@ class SCOT_CAM(nn.Module):
 
         # 1. Feature extraction network initialization.
         if backbone == 'resnet50':
-            self.backbone = resnet.resnet50(pretrained=True).to(device)
+            self.backbone = resnet.resnet50(pretrained=True)
             nbottlenecks = [3, 4, 6, 3]
         elif backbone == 'resnet101':
-            self.backbone = resnet.resnet101(pretrained=True).to(device)
+            self.backbone = resnet.resnet101(pretrained=True)
             nbottlenecks = [3, 4, 23, 3]
         elif backbone == 'fcn101':
             self.backbone = gcv.models.get_fcn_resnet101_voc(pretrained=True).to(device).pretrained
             if len(cam)==0:
-                self.backbone1 = gcv.models.get_fcn_resnet101_voc(pretrained=True).to(device)
+                self.backbone1 = gcv.models.get_fcn_resnet101_voc(pretrained=True)
                 self.backbone1.eval()
             nbottlenecks = [3, 4, 23, 3]
         elif backbone == 'resnet34':
-            self.backbone = resnet.resnet34(pretrained=True).to(device)
+            self.backbone = resnet.resnet34(pretrained=True)
             nbottlenecks = [3, 4, 6, 3]
         else:
             raise Exception('Unavailable backbone: %s' % backbone)
         self.bottleneck_ids = reduce(add, list(map(lambda x: list(range(x)), nbottlenecks)))
         self.layer_ids = reduce(add, [[i + 1] * x for i, x in enumerate(nbottlenecks)])
+        if len(cam) > 0: 
+            print('use identity')
+            self.backbone.fc = nn.Identity()
+        self.backbone.to(device)
         self.backbone.eval()
 
         self.hyperpixel_ids = hyperpixel_ids

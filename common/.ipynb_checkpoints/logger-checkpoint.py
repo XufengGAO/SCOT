@@ -25,10 +25,7 @@ class Logger:
                     logpath = logpath + "_%s"%(args.scheduler)
                     
                 # if args.selfsup in ['dino', 'denseCL']:
-                logpath = logpath + "_%s"%(args.split)
-                
-                if args.batch_size == 1:
-                    logpath = logpath + "_b1"
+                logpath = logpath + "_%s_bsz%d"%(args.split, args.batch_size)
                 
                 cls.logpath = os.path.join('logs', args.backbone, args.selfsup, args.supervision, args.benchmark, logpath + '.log')
                 os.makedirs(cls.logpath, exist_ok=True)
@@ -210,10 +207,10 @@ class AverageMeter:
         msg += '[Batch: %04d/%04d] ' % (batch_idx+1, datalen)
         if len(self.loss_buffer) > 0:
             msg += 'Loss (last sample): %6.4f  ' % self.loss_buffer[-1]
-            msg += 'Avg Loss in buf: %6.5f  ' % (sum(self.loss_buffer) / len(self.loss_buffer))
+            msg += 'Avg Loss: %6.5f  ' % (sum(self.loss_buffer) / len(self.loss_buffer))
 
         for key in self.buffer_keys:
-            msg += 'Avg %s in buf: sim=%4.4f, votes=%4.4f, votes_geo=%4.4f' % (key.upper(), 
+            msg += 'Avg %s: sim=%4.4f, votes=%4.4f, votes_geo=%4.4f' % (key.upper(), 
                                                                                sum(self.buffer['sim'][key]) / len(self.buffer['sim'][key]),
                                                                                sum(self.buffer['votes'][key]) / len(self.buffer['votes'][key]),
                                                                                sum(self.buffer['votes_geo'][key]) / len(self.buffer['votes_geo'][key]),)

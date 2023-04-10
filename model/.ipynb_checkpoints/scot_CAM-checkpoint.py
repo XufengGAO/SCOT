@@ -21,24 +21,28 @@ class SCOT_CAM(nn.Module):
 
         # 1. Feature extraction network initialization.
         if backbone == 'resnet50':
-            self.backbone = resnet.resnet50(pretrained=True).to(device)
+            self.backbone = resnet.resnet50(pretrained=True)
             nbottlenecks = [3, 4, 6, 3]
         elif backbone == 'resnet101':
-            self.backbone = resnet.resnet101(pretrained=True).to(device)
+            self.backbone = resnet.resnet101(pretrained=True)
             nbottlenecks = [3, 4, 23, 3]
         elif backbone == 'fcn101':
             self.backbone = gcv.models.get_fcn_resnet101_voc(pretrained=True).to(device).pretrained
             if len(cam)==0:
-                self.backbone1 = gcv.models.get_fcn_resnet101_voc(pretrained=True).to(device)
+                self.backbone1 = gcv.models.get_fcn_resnet101_voc(pretrained=True)
                 self.backbone1.eval()
             nbottlenecks = [3, 4, 23, 3]
         elif backbone == 'resnet34':
-            self.backbone = resnet.resnet34(pretrained=True).to(device)
+            self.backbone = resnet.resnet34(pretrained=True)
             nbottlenecks = [3, 4, 6, 3]
         else:
             raise Exception('Unavailable backbone: %s' % backbone)
         self.bottleneck_ids = reduce(add, list(map(lambda x: list(range(x)), nbottlenecks)))
         self.layer_ids = reduce(add, [[i + 1] * x for i, x in enumerate(nbottlenecks)])
+        if len(cam) > 0: 
+            print('use identity')
+            self.backbone.fc = nn.Identity()
+        self.backbone.to(device)
         self.backbone.eval()
 
         self.hyperpixel_ids = hyperpixel_ids
@@ -161,14 +165,17 @@ class SCOT_CAM(nn.Module):
                     mask = self.get_FCN_map(img, feat_map, fc, sz=(img.size(2),img.size(3)))
                 else:
                     mask = self.get_CAM_multi(img, feat_map, fc, sz=(img.size(2),img.size(3)), top_k=2)
-                    # for i in range(4):
-                    #     mask0 = self.get_CAM_multi2(img[i].unsqueeze(0), feat_map[i].unsqueeze(0), fc[i].unsqueeze(0), sz=(img.size(2),img.size(3)), top_k=2)
-                    #     print(mask0.size())
-                    #     print(torch.sum(mask[i]-mask0))
-                        # print(torch.max(mask[i]), torch.min(mask[i]))
-                scale = 1.0
-            else:
-                scale = 255.0
+                    # mask = []
+                    # for im, fm, fc in zip(img, feat_map, fc):
+                    #     ms = self.get_CAM_multi2(im.unsqueeze(0), fm.unsqueeze(0), fc.unsqueeze(0), sz=(img.size(2),img.size(3)), top_k=2)
+                    #     mask.append(ms)
+                    # if len(mask) > 1:
+                    #     mask = torch.stack(mask, dim=0)
+                    # else:
+                    #     mask = mask[0].unsqueeze(0)
+
+                    # print(torch.sum((masks- mask)>1e-3))                    
+            scale = 1.0
             
             hpos = geometry.center(hpgeometry) # 4096 2
             # print("hpos", hpos.size(), hpos[:], Geometry.rf_center.size(), Geometry.rf_center[:])
@@ -189,7 +196,7 @@ class SCOT_CAM(nn.Module):
         # print(img.size())
         # print(img.size()[2:][::-1], weights.unsqueeze(-1).size())
 
-        return hpgeometry, hyperfeats, img.size()[2:][::-1], weights.unsqueeze(-1)
+        return hpgeometry, hyperfeats, img.size()[2:][::-1], weights
 
 
     def extract_intermediate_feat(self, img, return_hp=True, backbone='resnet101'):
