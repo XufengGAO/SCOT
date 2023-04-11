@@ -9,7 +9,7 @@ import torch
 import time
 from PIL import Image
 from data import download
-from model import scot_CAM, util, geometry, evaluation
+from model import scot_CAM, util, geometry, evaluation, scot_CAM2
 from model.objective import Objective
 from common import supervision as sup
 from common import utils
@@ -158,8 +158,8 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
         )
         
         # log batch loss, batch pck    
-        # if training and (step % 60 == 0):
-        average_meter.write_process(step, len(dataloader), epoch)
+        if training and (step % 60 == 0):
+            average_meter.write_process(step, len(dataloader), epoch)
 
         # log running step loss 
         if False and (step % 100 == 0):
@@ -347,6 +347,7 @@ if __name__ == "__main__":
     parser.add_argument('--img_side', type=str, default='(300)')
     parser.add_argument("--use_batch", type= utils.boolean_string, nargs="?", default=False)
     parser.add_argument("--trg_cen", type= utils.boolean_string, nargs="?", default=False)
+    parser.add_argument("--use_scot2", type= utils.boolean_string, nargs="?", default=False)
 
     # Algorithm parameters
     parser.add_argument('--sim', type=str, default='OTGeo', help='Similarity type: OT, OTGeo, cos, cosGeo')
@@ -390,16 +391,28 @@ if __name__ == "__main__":
     hyperpixels = list(range(n_layers[args.backbone]))
 
     # 3. Model intialization
-    model = scot_CAM.SCOT_CAM(
-        args.backbone,
-        hyperpixels,
-        args.benchmark,
-        device,
-        args.cam,
-        args.use_xavier,
-        weight_thres=args.weight_thres,
-        select_all=args.select_all
-    )
+    if args.use_scot2:
+        model = scot_CAM2.SCOT_CAM(
+            args.backbone,
+            hyperpixels,
+            args.benchmark,
+            device,
+            args.cam,
+            args.use_xavier,
+            weight_thres=args.weight_thres,
+            select_all=args.select_all
+        )
+    else:
+        model = scot_CAM.SCOT_CAM(
+            args.backbone,
+            hyperpixels,
+            args.benchmark,
+            device,
+            args.cam,
+            args.use_xavier,
+            weight_thres=args.weight_thres,
+            select_all=args.select_all
+        )
 
     if args.use_pretrained:
         model.load_state_dict(torch.load(args.pretrained_path, map_location=device))
@@ -444,7 +457,9 @@ if __name__ == "__main__":
             wandb_name = wandb_name + "_m%.2f"%(args.momentum)
         # if args.trg_cen:
         wandb_name = wandb_name + "_bsz%d"%(args.batch_size)
-
+        
+        if args.use_scot2:
+            wandb_name = wandb_name + "_scot2"
         # if args.selfsup in ['dino', 'denseCL']:
         wandb_name = wandb_name + "_%s_%s_%s"%(args.selfsup, args.backbone, args.split)
 

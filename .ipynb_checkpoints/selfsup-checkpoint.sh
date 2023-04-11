@@ -14,22 +14,23 @@ python train.py \
     --weight_thres 0.10 \
     --select_all 0.90 \
     --alpha 0.1 \
-    --lr 0.00005 \
-    --momentum 0.9 \
-    --epochs 150 \
-    --batch_size 15 \
+    --lr 0.003 \
+    --momentum 0.99 \
+    --epochs 60 \
+    --batch_size 16 \
     --optimizer 'sgd' \
     --exp1 1.0 \
     --exp2 0.5 \
     --classmap 1 \
-    --use_wandb False \
+    --use_wandb True \
     --use_xavier False \
     --use_scheduler False \
     --use_grad_clip False \
     --loss_stage "votes" \
     --split "trn" \
     --cam "mask/resnet50/200_300" \
-    --img_side '(200,300)'
+    --img_side '(200,300)' \
+    --use_scot2 True
     # --use_pretrained True \
     # --pretrained_path "./backbone/ckp_r50.pt"
     # --run_id '1j2qjgkr' \

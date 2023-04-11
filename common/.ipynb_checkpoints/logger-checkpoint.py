@@ -23,6 +23,8 @@ class Logger:
                     logpath = logpath + "_m%.2f"%(args.momentum)
                 if args.use_scheduler:
                     logpath = logpath + "_%s"%(args.scheduler)
+                if args.use_scot2:
+                    logpath = logpath + "_scot2"   
                     
                 # if args.selfsup in ['dino', 'denseCL']:
                 logpath = logpath + "_%s_bsz%d"%(args.split, args.batch_size)
