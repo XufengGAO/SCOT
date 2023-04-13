@@ -22,7 +22,7 @@ if __name__ == "__main__":
     parser.add_argument('--gpu', type=str, default='0', help='GPU id')
     parser.add_argument('--datapath', type=str, default='./Datasets_SCOT') 
     parser.add_argument('--benchmark', type=str, default='pfpascal')
-    parser.add_argument('--backbone', type=str, default='resnet50')
+    parser.add_argument('--backbone', type=str, default='resnet101')
     parser.add_argument('--thres', type=str, default='auto', choices=['auto', 'img', 'bbox'])
     parser.add_argument('--split', type=str, default='trn', help='trn, val, test, old_trn') 
     parser.add_argument('--classmap', type=int, default=0, help='class activation map: 0 for none, 1 for using CAM')
@@ -67,14 +67,14 @@ if __name__ == "__main__":
         for step, batch in tqdm(enumerate(mask_dl)):
             img_imname, src_img = batch['img_imname'], batch['src_img'].to(device)
             src_mask = model.extract_cam(src_img, args.backbone)
-            # torch.save(src_mask, os.path.join(f0_folder, '%s.pt'%(img_imname[0][:-4])))
+            torch.save(src_mask.cpu(), os.path.join(f0_folder, '%s.pt'%(img_imname[0][:-4])))
 
             trg_img = torch.flip(src_img, dims=(3,))
             trg_mask = model.extract_cam(trg_img, args.backbone) 
-            # torch.save(trg_mask, os.path.join(f1_folder, 'f1', '%s.pt'%(img_imname[0][:-4])))
+            torch.save(trg_mask.cpu(), os.path.join(f1_folder, '%s.pt'%(img_imname[0][:-4])))
             # img = transform(mask)
             # img.save()
-            print(torch.max(src_mask), torch.max(trg_mask))
+            # print(torch.max(src_mask), torch.max(trg_mask))
             
             # print(mask.size(), img_imname[0][:-4])
             

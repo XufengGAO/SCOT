@@ -149,6 +149,7 @@ class PFPascalDataset(CorrespondenceDataset):
 
         if os.path.exists(mask_name):
             # mask = np.array(Image.open(mask_name)) # WxH
+            # print(mask_name)
             mask = torch.load(mask_name)
         else:
             #print(img_name,mask_name)

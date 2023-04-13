@@ -8,7 +8,7 @@ parameters:
   benchmark:
     value: 'pfpascal'
   backbone:
-    value: 'resnet50'
+    value: 'resnet101'
   # use_pretrained:
   #   value: True
   # pretrained_path: 
@@ -18,20 +18,20 @@ parameters:
   # start_epoch:
   #   value: 18
   selfsup:
-    value: "dino"
+    value: "sup"
   alpha:
-    value: 0.1
+    value: 0.15
   weight_thres:
-    value: 0.10
+    value: 0.1
   select_all:
-    values: [1.01, 0.90]
+    value: 0.9
   lr:
-    values: [0.001, 0.0005, 0.0001, 0.003]
+    values: [0.005, 0.003, 0.001]
     # , 0.01, 0.005, 0.003, 0.001 , 0.0003, 0.0001, 0.00001
   epochs:
     value: 60
   batch_size:
-    value: 14
+    value: 8
   optimizer:
     value: 'sgd'
   momentum:
@@ -58,7 +58,7 @@ parameters:
   supervision:
     values: ["strong"] 
   cam:
-    value: "mask/resnet50/200_300"
+    value: "mask/resnet101/200_300"
   img_side:
     value: '(200,300)'
     # , "votes", "votes_geo" "sim", "votes"， 

@@ -29,7 +29,7 @@ class Logger:
                 # if args.selfsup in ['dino', 'denseCL']:
                 logpath = logpath + "_%s_bsz%d"%(args.split, args.batch_size)
                 
-                cls.logpath = os.path.join('logs', args.backbone, args.selfsup, args.supervision, args.benchmark, logpath + '.log')
+                cls.logpath = os.path.join('logs', args.backbone, args.selfsup, args.supervision, args.benchmark, "%s"%(args.alpha), logpath + '.log')
                 os.makedirs(cls.logpath, exist_ok=True)
                 filemode = 'w'
             else:

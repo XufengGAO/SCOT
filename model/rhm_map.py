@@ -217,7 +217,7 @@ def rhm(src_hyperpixels, trg_hyperpixels, hsfilter, sim, exp1, exp2, eps, ncells
 
         geometric_scores = torch.cat(geometric_scores, dim=0)
         
-    geometric_scores = votes * geometric_scores
+        geometric_scores = votes * geometric_scores
     
     #print("geometric scores", geometric_scores.size(), geometric_scores.max(), geometric_scores.min()) # 4x4096x4096
   

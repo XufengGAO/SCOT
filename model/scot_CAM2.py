@@ -110,7 +110,7 @@ class SCOT_CAM(nn.Module):
             
             correlation += self.learner(hyper_id, torch.bmm(src_hp, trg_hp))
 
-            src_norm +=  src_hp.pow(2).sum(2, keepdim=True)  # [4, 4096, 1]
+            src_norm +=  self.learner(hyper_id, src_hp).pow(2).sum(2, keepdim=True)  # [4, 4096, 1]
             trg_norm += trg_hp.pow(2).sum(1, keepdim=True) # [4, 1, 4096]
 
         # src_hps = torch.cat(src_hps, dim=2).transpose(1,2)

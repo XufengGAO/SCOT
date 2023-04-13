@@ -3,21 +3,21 @@
 set -x
 
 benchmark="pfpascal"
-backbone="resnet50"
+backbone="resnet101"
 # -m torch.utils.bottleneck
 python train.py \
     --benchmark $benchmark \
     --backbone $backbone \
-    --wandb_proj "new SCOT" \
+    --wandb_proj "final SCOT" \
     --selfsup "sup" \
     --supervision 'strong' \
     --weight_thres 0.10 \
     --select_all 0.90 \
     --alpha 0.1 \
     --lr 0.003 \
-    --momentum 0.99 \
-    --epochs 60 \
-    --batch_size 16 \
+    --momentum 0.9 \
+    --epochs 100 \
+    --batch_size 8 \
     --optimizer 'sgd' \
     --exp1 1.0 \
     --exp2 0.5 \
@@ -27,10 +27,10 @@ python train.py \
     --use_scheduler False \
     --use_grad_clip False \
     --loss_stage "votes" \
-    --split "trn" \
-    --cam "mask/resnet50/200_300" \
+    --split "trnval" \
+    --cam "mask/resnet101/200_300" \
     --img_side '(200,300)' \
-    --use_scot2 True
+    --use_scot2 False
     # --use_pretrained True \
     # --pretrained_path "./backbone/ckp_r50.pt"
     # --run_id '1j2qjgkr' \

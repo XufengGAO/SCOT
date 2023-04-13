@@ -192,7 +192,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
                     },
                 )
 
-        if (step % 100 == 0):
+        if (step % 240 == 0):
             # 1. Draw weight map
             weight_map_path = os.path.join(Logger.logpath, "weight_map")
             os.makedirs(weight_map_path, exist_ok=True)
@@ -237,6 +237,15 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
         del sim, votes, votes_geo, src_box, trg_box, feat_size, src_center, trg_center, src_hf, trg_hf
         del model_outputs, loss, eval_result_list, prd_kps_list
 
+    # 2.5
+    if args.split == "trnval" and args.use_wandb:
+        weight_list =  model.learner.layerweight.view(-1).sigmoid().tolist()
+        weight_dict = dict()
+        for i, weight in enumerate(weight_list):
+            weight_dict['w%d'%(i)] = weight
+        wandb.log(weight_dict)
+            
+    
     # 3. Draw class pck
     if (epoch % 2)==0:
         draw_class_pck_path = os.path.join(Logger.logpath, "draw_class_pck")
@@ -297,8 +306,9 @@ def test(model, dataloader, args):
 
         if pair_pck==0:
             Logger.info("zero_pck: %s_%s"%(batch['src_imname'], batch['trg_imname']))
-
+    
     avg_pck =  average_meter.log_pck()
+    del votes_geo, src_box, trg_box
     return avg_pck
 
 if __name__ == "__main__":
@@ -316,7 +326,7 @@ if __name__ == "__main__":
     parser.add_argument('--thres', type=str, default='auto', choices=['auto', 'img', 'bbox'])
     parser.add_argument('--alpha', type=float, default=0.1)
     parser.add_argument('--logpath', type=str, default='')
-    parser.add_argument('--split', type=str, default='trn', help='trn, val, test, old_trn') 
+    parser.add_argument('--split', type=str, default='trn', help='trn, val, test, old_trn, trn_val') 
 
     # Training parameters
     parser.add_argument('--supervision', type=str, default='strong', choices=['weak', 'strong', 'flow', 'softwarp', 'hardwarp'])
@@ -461,7 +471,7 @@ if __name__ == "__main__":
         if args.use_scot2:
             wandb_name = wandb_name + "_scot2"
         # if args.selfsup in ['dino', 'denseCL']:
-        wandb_name = wandb_name + "_%s_%s_%s"%(args.selfsup, args.backbone, args.split)
+        wandb_name = wandb_name + "_%s_%s_%s_alp%.2f"%(args.selfsup, args.backbone, args.split, args.alpha)
 
         run = wandb.init(project=args.wandb_proj, config=args, id=args.run_id, resume="allow", name=wandb_name)
         # wandb.watch(model.learner, log="all", log_freq=100)
@@ -488,15 +498,20 @@ if __name__ == "__main__":
         wandb.define_metric("test_pck_votes", step_metric="epochs")
         wandb.define_metric("test_pck_votes_geo", step_metric="epochs")
         
+        if args.split == "trnval":
+            for i in range(n_layers[args.backbone]):
+                wandb.define_metric('w%d'%(i), step_metric="epochs")
+        
     # 5. Dataset download & initialization
     num_workers = 16 if torch.cuda.is_available() else 8
     pin_memory = True if torch.cuda.is_available() else False
     
     print("loading Dataset")
+    
     trn_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, args.split, args.cam, img_side=img_side, use_resize=True, use_batch=args.use_batch)
     trn_dl = DataLoader(dataset=trn_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory)
     
-    if args.split != "val":
+    if args.split not in ["val", "trnval"]:
         val_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, device, "val", args.cam, img_side=img_side, use_resize=True, use_batch=args.use_batch)
         val_dl = DataLoader(dataset=val_ds, batch_size=args.batch_size, num_workers=num_workers, pin_memory=pin_memory)
     
@@ -521,10 +536,20 @@ if __name__ == "__main__":
     log_benchmark = {}
     print("Training Start")
     train_started = time.time()
-
+    
+    if args.use_wandb:
+        wandb.log({'epochs':-2})
+    with torch.no_grad():
+        test_pck = test(model, test_dl, args)
+        log_benchmark["test_pck"] = test_pck
+    if args.use_wandb:
+        wandb.log({'epochs':-1})
+        wandb.log(log_benchmark)
+        
     for epoch in range(args.start_epoch, args.epochs):
 
         # training
+        torch.cuda.empty_cache()
         trn_loss, trn_pck = train(epoch, model, trn_dl, strategy, optimizer, training="train", args=args)
         log_benchmark["trn_loss"] = trn_loss
         log_benchmark["trn_pck_sim"] = trn_pck['sim']
@@ -532,7 +557,7 @@ if __name__ == "__main__":
         log_benchmark["trn_pck_votes_geo"] = trn_pck['votes_geo']
         
         # validation
-        if args.split != "val":
+        if args.split not in ["val", "trnval"]:
             with torch.no_grad():
                 val_loss, val_pck = train(epoch, model, val_dl, strategy, optimizer, training="val", args=args)
                 log_benchmark["val_loss"] = val_loss
@@ -550,8 +575,11 @@ if __name__ == "__main__":
             model_pck = val_pck
         else:
             model_pck = trn_pck
-        if (epoch%5)==0:
+            
+        save_e = 1 if args.split == "trnval" else 5
+        if (epoch%save_e)==0:
             Logger.save_epoch(model, epoch, model_pck["votes_geo"])
+            
         if model_pck["votes_geo"] > best_val_pck:
             old_best_val_pck = best_val_pck
             best_val_pck = model_pck["votes_geo"]
@@ -569,5 +597,7 @@ if __name__ == "__main__":
 
         time_message = 'Training %d epochs took:%4.3f\n' % (epoch+1, (time.time()-train_started)/60) + ' minutes'
         Logger.info(time_message)
+        
+        torch.cuda.empty_cache()
 
     Logger.info("==================== Finished training ====================")
