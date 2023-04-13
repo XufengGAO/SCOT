@@ -61,11 +61,19 @@ class WarpSupStrategy(SupervisionStrategy):
         else:
             row_softmax = nn.Identity()
             col_softmax = nn.Identity()
+
+        # print(src_hf.size(), trg_hf.size())
+        src_feat_norms = torch.norm(src_hf, p=2, dim=1, keepdim=True) # [4, 4096, 1]
+        trg_feat_norms = torch.norm(src_hf, p=2, dim=1, keepdim=True)# [4, 1, 4096]
         
+        src_hf = src_hf/src_feat_norms
+        trg_hf = trg_hf/trg_feat_norms
+
         loss_warp = 0.5 * ((torch.bmm(src_hf, col_softmax(correlation_matrix)) - trg_hf).norm(dim=(1,2)).mean() + \
                 (torch.bmm(trg_hf, row_softmax(correlation_matrix).transpose(1,2)) - src_hf).norm(dim=(1,2)).mean())
         
-
+        print(loss_warp)
+        
         return loss_warp
 
 class EPESupStrategy(SupervisionStrategy):
