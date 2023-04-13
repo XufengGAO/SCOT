@@ -61,7 +61,6 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
 
     average_meter = AverageMeter(dataloader.dataset.benchmark, dataloader.dataset.cls)
     total_steps = len(dataloader)
-    lrs = []
 
     for step, batch in enumerate(dataloader):
         optimizer.zero_grad()
