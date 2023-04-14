@@ -3,7 +3,7 @@
 set -x
 
 benchmark="pfpascal"
-backbone="resnet101"
+backbone="resnet50"
 # -m torch.utils.bottleneck
 python train.py \
     --benchmark $benchmark \
@@ -13,11 +13,11 @@ python train.py \
     --supervision 'strong' \
     --weight_thres 0.10 \
     --select_all 0.90 \
-    --alpha 0.1 \
-    --lr 0.003 \
-    --momentum 0.9 \
+    --alpha 0.05 \
+    --lr 0.005 \
+    --momentum 0.95 \
     --epochs 100 \
-    --batch_size 8 \
+    --batch_size 14 \
     --optimizer 'sgd' \
     --exp1 1.0 \
     --exp2 0.5 \
@@ -28,7 +28,7 @@ python train.py \
     --use_grad_clip False \
     --loss_stage "votes" \
     --split "trnval" \
-    --cam "mask/resnet101/200_300" \
+    --cam "mask/resnet50/200_300" \
     --img_side '(200,300)' \
     --use_scot2 False
     # --use_pretrained True \
