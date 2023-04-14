@@ -7,14 +7,54 @@ import os
 from torch.utils.data import DataLoader
 import torch
 import time
-from test_data import download
+from data import download
 from model import scot_CAM, util, geometry, evaluation
 from common import utils
-import wandb
+from common.logger import AverageMeter
 import logging
 
 # wandb.login()
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def test(model, dataloader, args):
+    r"""Code for test SCOT"""
+
+    model.eval()
+    average_meter = AverageMeter(dataloader.dataset.benchmark, dataloader.dataset.cls)
+    for _, batch in enumerate(dataloader):
+        batch['src_img'] = batch['src_img'].to(device)
+        batch['trg_img'] = batch['trg_img'].to(device)
+        
+        if "src_mask" in batch.keys():
+            src_mask = batch["src_mask"].to(device)
+            trg_mask = batch["trg_mask"].to(device)
+        else:
+            src_mask = None
+            trg_mask = None
+
+        votes_geo, src_box, trg_box = model(
+            batch['src_img'],
+            batch['trg_img'],
+            args.sim,
+            args.exp1,
+            args.exp2,
+            args.eps,
+            args.classmap,
+            src_mask,
+            trg_mask,
+            args.backbone,
+            training="test",
+        )
+        batch['src_kps'] = batch['src_kps'].to(device)
+
+        prd_kps = geometry.predict_test_kps(src_box, trg_box, batch['src_kps'][0], votes_geo[0])
+        pair_pck = average_meter.eval_pck(prd_kps, batch, args.alpha)
+
+        if pair_pck==0:
+            print("zero_pck: %s_%s"%(batch['src_imname'], batch['trg_imname']))
+    
+    avg_pck =  average_meter.log_pck()
+    del votes_geo, src_box, trg_box
+    return avg_pck
 
 if __name__ == "__main__":
     # Arguments parsing
@@ -33,10 +73,12 @@ if __name__ == "__main__":
 
     # Training parameters
     parser.add_argument('--batch_size', type=int, default=1)
-    parser.add_argument("--use_wandb", type= utils.boolean_string, nargs="?", default=False)
     parser.add_argument('--pretrained_path', type=str, default='')
     parser.add_argument('--backbone_path', type=str, default='./backbone')
-    parser.add_argument('--weight_thres', type=float, default=0.05,help='weight_thres (default: 0.05)')
+
+    parser.add_argument('--img_side', type=str, default='(300)')
+    parser.add_argument("--use_batch", type= utils.boolean_string, nargs="?", default=False)
+    parser.add_argument("--trg_cen", type= utils.boolean_string, nargs="?", default=False)
 
     # Algorithm parameters
     parser.add_argument('--sim', type=str, default='OTGeo', help='Similarity type: OT, OTGeo, cos, cosGeo')
@@ -46,22 +88,30 @@ if __name__ == "__main__":
     parser.add_argument('--classmap', type=int, default=1, help='class activation map: 0 for none, 1 for using CAM')
     parser.add_argument('--cam', type=str, default='', help='activation map folder, empty for end2end computation')
 
-    parser.add_argument('--run_id', type=str, default='', help='run_id')
-
     args = parser.parse_args()
 
     if args.selfsup in ['dino', 'denseCL']:
         args.backbone_path = os.path.join(args.backbone_path, "%s_%s.pth"%(args.selfsup, args.backbone))
-        args.classmap = 0
 
-    if args.use_wandb and args.run_id == '':
-        args.run_id = wandb.util.generate_id()
+    img_side = util.parse_string(args.img_side)
+    if isinstance(img_side, int):
+        # use trg_center if only scale the max_side
+        args.trg_cen = True
+        args.use_batch = False
+    else:
+        args.trg_cen = False
+        args.use_batch = True
 
     logtime = datetime.datetime.now().__format__('_%m%d_%H%M%S')
     logpath = args.logpath
     logpath = os.path.join('logs', logpath + logtime + '.log')
     util.init_logger(logpath)
     util.log_args(args)
+
+    # 1. CUDA and reproducibility
+    if torch.cuda.is_available():
+        os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
+    util.fix_randseed(seed=0)
     
     # fmt: on
     # 1. CUDA and reproducibility
@@ -74,20 +124,16 @@ if __name__ == "__main__":
 
     # 3. Model intialization
     model = scot_CAM.SCOT_CAM(
-        backbone=args.backbone,
-        hyperpixel_ids=hyperpixels,
-        benchmark=args.benchmark,
-        device=device,
-        cam=args.cam,
-        weight_thres=args.weight_thres,
-        training=False
+        args.backbone,
+        hyperpixels,
+        args.benchmark,
+        device,
+        args.cam,
     )
 
     model.load_state_dict(torch.load(args.pretrained_path, map_location=device))
 
     if args.selfsup in ['dino', 'denseCL']:
-        # print(model.backbone.conv1.weight[1,:,:2,:2])
-        # print(model.backbone.fc.weight[:2,:5])
         pretrained_backbone = torch.load(args.backbone_path, map_location=device)
         backbone_keys = list(model.backbone.state_dict().keys())
             
@@ -99,24 +145,15 @@ if __name__ == "__main__":
             load_keys = list(pretrained_backbone.keys())
         missing_keys = [i for i in backbone_keys if i not in load_keys]
         print(missing_keys)
-        # print(model.backbone.conv1.weight[1,:,:2,:2])
-        # print(model.backbone.fc.weight[:2,:5])
-
-    if args.use_wandb:
-        run = wandb.init(project="SCOT", config=args, id=args.run_id, resume="allow")
-        # wandb.watch(model.learner, log="all", log_freq=100)
-        wandb.define_metric("epochs")
-        
-        wandb.define_metric("evaluate_pck_sim", step_metric="epochs")
-        wandb.define_metric("evaluate_pck_votes", step_metric="epochs")
-        wandb.define_metric("evaluate_pck_votes_geo", step_metric="epochs")
 
     # 4. Dataset download & initialization
     num_workers = 16 if torch.cuda.is_available() else 8
     pin_memory = True if torch.cuda.is_available() else False
  
-    dset = download.load_dataset(args.benchmark, args.datapath, args.thres, device, args.split, args.cam)
-    dataloader = DataLoader(dset, batch_size=1, num_workers=num_workers)
+    print("loading Dataset")
+    dset = download.load_dataset(args.benchmark, args.datapath, args.thres, device, args.split, args.cam, img_side=img_side, use_resize=True, use_batch=False)
+    dataloader = DataLoader(dset, batch_size=1, num_workers=num_workers, pin_memory=pin_memory)
+    print("loading finished")
 
     # 5. Evaluator
     evaluator = evaluation.Evaluator(args.benchmark, device)
@@ -124,71 +161,5 @@ if __name__ == "__main__":
     # 7. evaluate SCOT
     print("Eval Start")
 
-    train_started = time.time()
-
-    zero_pcks = 0
-    srcpt_list = []
-    trgpt_list = []
-    time_list = []
-    PCK_list = []
-    for idx, data in enumerate(dataloader):
-        threshold = 0.0
-        
-        # a) Retrieve images and adjust their sizes to avoid large numbers of hyperpixels
-        data['src_img'], data['src_kps'], data['src_intratio'] = util.resize(data['src_img'], data['src_kps'][0])
-        data['trg_img'], data['trg_kps'], data['trg_intratio'] = util.resize(data['trg_img'], data['trg_kps'][0])
-        src_size = data['src_img'].size()
-        trg_size = data['trg_img'].size()
-        
-        if len(args.cam)>0:
-            data['src_mask'] = util.resize_mask(data['src_mask'],src_size)
-            data['trg_mask'] = util.resize_mask(data['trg_mask'],trg_size)
-            data['src_bbox'] = util.get_bbox_mask(data['src_mask'], thres=threshold).to(device)
-            data['trg_bbox'] = util.get_bbox_mask(data['trg_mask'], thres=threshold).to(device)
-        else:
-            data['src_mask'] = None
-            data['trg_mask'] = None
-
-        data['alpha'] = args.alpha
-        tic = time.time()
-        
-        data['src_img'] = data['src_img'].unsqueeze(dim=0)
-        data['trg_img'] = data['trg_img'].unsqueeze(dim=0)
-
-        with torch.no_grad():
-            sim, votes, votes_geo, src_box, trg_box, _ = model(
-                data['src_img'],
-                data['trg_img'],
-                args.sim,
-                args.exp1,
-                args.exp2,
-                args.eps,
-                args.classmap,
-                src_mask=None,
-                trg_mask=None,
-                backbone=args.backbone,
-            )
-            
-            
-            confidence_ts = votes_geo.squeeze(dim=0)
-            conf, trg_indices = torch.max(confidence_ts, dim=1)
-            unique, inv = torch.unique(trg_indices, sorted=False, return_inverse=True)
-            trgpt_list.append(len(unique))
-            srcpt_list.append(len(confidence_ts))
-
-        prd_kps = geometry.predict_test_kps(src_box, trg_box, data['src_kps'], confidence_ts)
-        toc = time.time()
-        #print(toc-tic)
-        time_list.append(toc-tic)
-        pair_pck = evaluator.evaluate(prd_kps, data)
-        PCK_list.append(pair_pck)
-        if pair_pck==0:
-            zero_pcks += 1
-    
-        evaluator.log_result(idx, data=data)
-
-    logging.info('source points:'+str(sum(srcpt_list)*1.0/len(srcpt_list)))
-    logging.info('target points:'+str(sum(trgpt_list)*1.0/len(trgpt_list)))
-    logging.info('avg running time:'+str(sum(time_list)/len(time_list)))
-    evaluator.log_result(len(dset), data=None, average=True)
-    logging.info('Total Number of 0.00 pck images:'+str(zero_pcks))
+    test_pck = test(model, dataloader, args)
+    print('avg test pck: ', test_pck)

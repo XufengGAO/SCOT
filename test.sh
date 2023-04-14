@@ -3,15 +3,15 @@
 set -x
 
 benchmark="pfpascal"
-backbone="resnet101"
+backbone="resnet50"
 
 python test.py \
     --benchmark $benchmark \
     --backbone $backbone \
-    --weight_thres 0.10 \
     --alpha 0.1 \
     --exp1 1.0 \
     --exp2 0.5 \
     --classmap 1 \
     --split "test" \
-    --pretrained_path "./backbone/ckp.pt"
+    --img_side '(200,300)' \
+    --pretrained_path "./backbone/r50_a01.pt"
