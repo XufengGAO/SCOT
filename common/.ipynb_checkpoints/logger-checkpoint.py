@@ -14,7 +14,6 @@ class Logger:
     r"""Writes results of training/testing"""
     @classmethod
     def initialize(cls, args, training=True):
-        logtime = datetime.datetime.now().__format__('_%m%d_%H%M%S')
         if training:
             if args.logpath == "":
                 logpath = "%.e_%s_%s"%(args.lr, args.loss_stage, args.optimizer)
@@ -26,23 +25,19 @@ class Logger:
                 if args.use_scot2:
                     logpath = logpath + "_scot2"   
                     
-                # if args.selfsup in ['dino', 'denseCL']:
                 logpath = logpath + "_%s_bsz%d"%(args.split, args.batch_size)
                 
-                cls.logpath = os.path.join('logs', args.backbone, args.selfsup, args.supervision, args.benchmark, "%s"%(args.alpha), logpath + '.log')
-                os.makedirs(cls.logpath, exist_ok=True)
+                cls.logpath = os.path.join('logs', 'train', args.backbone, args.selfsup, args.loss, args.benchmark + "_%s"%(args.alpha), logpath)
                 filemode = 'w'
             else:
                 cls.logpath = args.logpath
                 filemode = 'a'
         else:
-            logtime = datetime.datetime.now().__format__('_%m%d_%H%M%S')
-            logpath = args.logpath
-            cls.logpath = os.path.join('logs', args.backbone, args.selfsup, args.supervision, args.benchmark, logpath + logtime + '.log')
-            os.makedirs(cls.logpath, exist_ok=True)
+            # logtime = datetime.datetime.now().__format__('_%m%d_%H%M%S')
+            cls.logpath = os.path.join('logs', 'test', args.backbone, args.selfsup, args.loss, args.benchmark, args.logpath)
             filemode = 'w'
-        
-        cls.benchmark = args.benchmark
+
+        os.makedirs(cls.logpath, exist_ok=True)
 
         logging.basicConfig(filemode=filemode,
                             filename=os.path.join(cls.logpath, 'log.txt'),
@@ -60,7 +55,6 @@ class Logger:
         # Tensorboard writer
 #         cls.tbd_writer = SummaryWriter(os.path.join(cls.logpath, 'tbd/runs'))
         
-
         # Log arguments
         logging.info('\n+=========== SCOT arguments ============+')
         for arg_key in args.__dict__:
@@ -81,34 +75,6 @@ class Logger:
     def save_model(cls, model, epoch, val_pck, old_val_pck):
         torch.save(model.state_dict(), os.path.join(cls.logpath, 'best_model.pt'))
         cls.info('Best Model saved @%d w/ val. PCK: %5.4f -> %5.4f on [%s]\n' % (epoch, old_val_pck, val_pck, os.path.join(cls.logpath, 'best_model.pt')))
-
-    @classmethod
-    def visualize_selection(cls, catwise_sel):
-        r"""Visualize (class-wise) layer selection frequency"""
-        if cls.benchmark == 'pfpascal':
-            sort_ids = [17, 8, 10, 19, 4, 15, 0, 3, 6, 5, 18, 13, 1, 14, 12, 2, 11, 7, 16, 9]
-        elif cls.benchmark == 'pfwillow':
-            sort_ids = np.arange(10)
-        elif cls.benchmark == 'caltech':
-            sort_ids = np.arange(101)
-        elif cls.benchmark == 'spair':
-            sort_ids = np.arange(18)
-
-        for key in catwise_sel:
-            catwise_sel[key] = torch.stack(catwise_sel[key]).mean(dim=0).cpu().numpy()
-
-        category = np.array(list(catwise_sel.keys()))[sort_ids]
-        values = np.array(list(catwise_sel.values()))[sort_ids]
-        cols = list(range(values.shape[1]))
-        df = pd.DataFrame(values, index=category, columns=cols)
-
-        plt.pcolor(df, vmin=0.0, vmax=1.0)
-        plt.gca().set_aspect('equal')
-        plt.yticks(np.arange(0.5, len(df.index), 1), df.index)
-        plt.xticks(np.arange(0.5, len(df.columns), 5), df.columns[::5])
-        plt.tight_layout()
-
-        plt.savefig('%s/selected_layers.jpg' % cls.logpath)
 
 
 class AverageMeter:

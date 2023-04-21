@@ -15,7 +15,7 @@ import numpy as np
 
 class SCOT_CAM(nn.Module):
     r"""SCOT framework"""
-    def __init__(self, backbone, hyperpixel_ids, benchmark, device, cam="", use_xavier=False, weight_thres=0.05, select_all=0.85):
+    def __init__(self, backbone, hyperpixels, benchmark, device, cam="", use_xavier=False, weight_thres=0.05, select_all=0.85):
         r"""Constructor for SCOT framework"""
         super(SCOT_CAM, self).__init__()
 
@@ -45,7 +45,7 @@ class SCOT_CAM(nn.Module):
         self.backbone.to(device)
         self.backbone.eval()
 
-        self.hyperpixel_ids = hyperpixel_ids
+        self.hyperpixels = hyperpixels
 
         # Hyperpixel id and pre-computed jump and receptive field size initialization
         # (the jump and receptive field sizes for 'fcn101' are heuristic values)
@@ -72,7 +72,7 @@ class SCOT_CAM(nn.Module):
         self.benchmark = benchmark
 
         # weighted module
-        self.learner = gating.DynamicFeatureSelection(hyperpixel_ids, use_xavier, weight_thres).to(device)
+        self.learner = gating.DynamicFeatureSelection(hyperpixels, use_xavier, weight_thres).to(device)
         self.feat_size = (64, 64)
 
         self.relu = nn.ReLU(inplace=True)
@@ -86,13 +86,13 @@ class SCOT_CAM(nn.Module):
         prob = torch.rand(1).item()
         if (prob > self.select_all) and training == "train":
             n_layers = {"resnet50": 17, "resnet101": 34, "fcn101": 34}
-            self.hyperpixel_ids = list(range(n_layers[backbone]))
+            self.hyperpixels = list(range(n_layers[backbone]))
         else:
-            self.hyperpixel_ids = self.learner.return_hyperpixel_ids()
+            self.hyperpixels = self.learner.return_hyperpixel_ids()
 
         # 2. Update receptive field size
-        self.update_rfsz = self.rfsz[self.hyperpixel_ids[0]]
-        self.update_jsz = self.jsz[self.hyperpixel_ids[0]]
+        self.update_rfsz = self.rfsz[self.hyperpixels[0]]
+        self.update_jsz = self.jsz[self.hyperpixels[0]]
 
         # 3. extract hyperpixel
         src_box, src_feats, src_imsize, src_weights = self.extract_hyperpixel(src_img, classmap, src_mask, backbone)
@@ -183,7 +183,7 @@ class SCOT_CAM(nn.Module):
             return sim, votes, votes_geo, src_box, trg_box, self.feat_size, src_center, trg_center, None, None
 
     def extract_cam(self, img, backbone='resnet101'):
-        self.hyperpixel_ids = []
+        self.hyperpixels = []
         feat_map, fc = self.extract_intermediate_feat(img, return_hp=False, backbone=backbone)
         mask = self.get_CAM_multi2(img, feat_map, fc, sz=(img.size(2),img.size(3)), top_k=2)
         # print(mask.size(), torch.max(mask), torch.min(mask))
@@ -289,7 +289,7 @@ class SCOT_CAM(nn.Module):
             feat = self.backbone.bn1.forward(feat)
             feat = self.backbone.relu.forward(feat)
             feat = self.backbone.maxpool.forward(feat)
-            if 0 in self.hyperpixel_ids:
+            if 0 in self.hyperpixels:
                 feats.append(feat.clone()) # scaled feats
 
             # Layer 1-4
@@ -309,7 +309,7 @@ class SCOT_CAM(nn.Module):
                 
                 feat += res
 
-                if hid + 1 in self.hyperpixel_ids:
+                if hid + 1 in self.hyperpixels:
                     feats.append(feat.clone())
 
                 feat = self.backbone.__getattr__('layer%d' % lid)[bid].relu.forward(feat)
@@ -338,7 +338,7 @@ class SCOT_CAM(nn.Module):
         
 
         # scaled the features
-        for i,  (hyper_id, hyper_feat) in enumerate(zip(self.hyperpixel_ids, feats)):
+        for i,  (hyper_id, hyper_feat) in enumerate(zip(self.hyperpixels, feats)):
             feats[i] = self.learner(hyper_id, hyper_feat)
         feats = torch.cat(feats, dim=1)  # 4-dim, BCHW
 

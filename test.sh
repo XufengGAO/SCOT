@@ -5,7 +5,7 @@ set -x
 benchmark="pfpascal"
 backbone="resnet50"
 
-python test.py \
+python test2.py \
     --benchmark $benchmark \
     --backbone $backbone \
     --alpha 0.1 \
@@ -14,4 +14,5 @@ python test.py \
     --classmap 1 \
     --split "test" \
     --img_side '(200,300)' \
-    --pretrained_path "./backbone/r50_a01.pt"
+    --selfsup 'dino' \
+    --pretrained_path "./backbone/dino_r50_a010.pt"

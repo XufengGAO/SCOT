@@ -9,7 +9,7 @@ from model.objective import Objective
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-class SupervisionStrategy(ABC):
+class LossStrategy(ABC):
     r"""Different strategies for methods:"""
     @abstractmethod
     def get_image_pair(self, batch, *args):
@@ -24,7 +24,7 @@ class SupervisionStrategy(ABC):
         pass
 
 
-class StrongSupStrategy(SupervisionStrategy):
+class StrongCELoss(LossStrategy):
     def get_image_pair(self, batch, *args):
         r"""Returns (semantically related) pairs for strongly-supervised training"""
         return batch['src_img'].to(device), batch['trg_img'].to(device)
@@ -44,7 +44,7 @@ class StrongSupStrategy(SupervisionStrategy):
 
         return loss_cre
     
-class WarpSupStrategy(SupervisionStrategy):
+class WarpSupStrategy(LossStrategy):
     def get_image_pair(self, batch, *args):
         r"""Returns (semantically related) pairs for strongly-supervised training"""
         return batch['src_img'].to(device), batch['trg_img'].to(device)
@@ -76,7 +76,7 @@ class WarpSupStrategy(SupervisionStrategy):
         
         return loss_warp
 
-class EPESupStrategy(SupervisionStrategy):
+class StrongFlowLoss(LossStrategy):
     def get_image_pair(self, batch, *args):
         r"""Returns (semantically related) pairs for strongly-supervised training"""
         return batch['src_img'], batch['trg_img']
@@ -164,7 +164,7 @@ def soft_argmax(corr, beta=0.02, feature_size=64):
 
 
 
-class WeakSupStrategy(SupervisionStrategy):
+class WeakLoss(LossStrategy):
     def get_image_pair(self, batch, *args):
         r"""Forms positive/negative image paris for weakly-supervised training"""
         training = args[0]

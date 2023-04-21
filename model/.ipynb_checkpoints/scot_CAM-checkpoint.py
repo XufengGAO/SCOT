@@ -15,7 +15,7 @@ import numpy as np
 
 class SCOT_CAM(nn.Module):
     r"""SCOT framework"""
-    def __init__(self, backbone, hyperpixel_ids, benchmark, device, cam="", use_xavier=False, weight_thres=0.05, select_all=0.85):
+    def __init__(self, backbone, hyperpixels, benchmark, device, cam="", use_xavier=False, weight_thres=0.05, select_all=0.85):
         r"""Constructor for SCOT framework"""
         super(SCOT_CAM, self).__init__()
 
@@ -45,7 +45,7 @@ class SCOT_CAM(nn.Module):
         self.backbone.to(device)
         self.backbone.eval()
 
-        self.hyperpixel_ids = hyperpixel_ids
+        self.hyperpixels = hyperpixels
 
         # Hyperpixel id and pre-computed jump and receptive field size initialization
         # (the jump and receptive field sizes for 'fcn101' are heuristic values)
@@ -72,49 +72,118 @@ class SCOT_CAM(nn.Module):
         self.benchmark = benchmark
 
         # weighted module
-        self.learner = gating.DynamicFeatureSelection(hyperpixel_ids, use_xavier, weight_thres).to(device)
+        self.learner = gating.DynamicFeatureSelection(hyperpixels, use_xavier, weight_thres).to(device)
         self.feat_size = (64, 64)
+
+        self.relu = nn.ReLU(inplace=True)
 
         self.select_all = select_all
 
-    def forward(self, src_img, trg_img, sim, exp1, exp2, eps, classmap, src_mask, trg_mask, backbone, training="trn", trg_cen=False):
+    def forward(self, src_img, trg_img, sim_type, exp1, exp2, eps, classmap, src_mask, trg_mask, backbone, training="traing", trg_cen=False):
         r"""Forward pass"""
 
         # 1. Update the hyperpixel_ids by checking the weights
         prob = torch.rand(1).item()
         if (prob > self.select_all) and training == "train":
             n_layers = {"resnet50": 17, "resnet101": 34, "fcn101": 34}
-            self.hyperpixel_ids = list(range(n_layers[backbone]))
+            self.hyperpixels = list(range(n_layers[backbone]))
         else:
-            self.hyperpixel_ids = self.learner.return_hyperpixel_ids()
+            self.hyperpixels = self.learner.return_hyperpixel_ids()
 
         # 2. Update receptive field size
-        self.update_rfsz = self.rfsz[self.hyperpixel_ids[0]]
-        self.update_jsz = self.jsz[self.hyperpixel_ids[0]]
+        self.update_rfsz = self.rfsz[self.hyperpixels[0]]
+        self.update_jsz = self.jsz[self.hyperpixels[0]]
 
         # 3. extract hyperpixel
-        src_hyperpixels = self.extract_hyperpixel(src_img, classmap, src_mask, backbone)
-        trg_hyperpixels = self.extract_hyperpixel(trg_img, classmap, trg_mask, backbone)
+        src_box, src_feats, src_imsize, src_weights = self.extract_hyperpixel(src_img, classmap, src_mask, backbone)
+        trg_box, trg_feats, trg_imsize, trg_weights = self.extract_hyperpixel(trg_img, classmap, trg_mask, backbone)
 
-        # print(self.feat_size, self.update_jsz, self.update_rfsz)
+        src_feat_norms = torch.norm(src_feats, p=2, dim=2).unsqueeze(2) # [4, 4096, 1]
+        trg_feat_norms = torch.norm(trg_feats, p=2, dim=2).unsqueeze(1) # [4, 1, 4096]
+        # print("Norm", src_feat_norms.size(), trg_feat_norms.size()) # torch.Size([3750, 1])
 
-        # 4. rhm
-        sim, votes, votes_geo = rhm_map.rhm(src_hyperpixels, trg_hyperpixels, 
-                                            self.hsfilter, sim, exp1, 
-                                            exp2, eps)
-        if training == "test":
-            return votes_geo, src_hyperpixels[0], trg_hyperpixels[0]
+        sim = torch.bmm(src_feats, trg_feats.transpose(1, 2)) / (torch.bmm(src_feat_norms, trg_feat_norms) + 1e-10)
+        sim = self.relu(sim) # clamp
+        # print("sim", sim.size(), sim.max(), sim.min())
+
+        if src_weights is not None:
+            mus = src_weights / src_weights.sum(dim=1).unsqueeze(-1) # normalize weights
         else:
-            src_center = geometry.center(src_hyperpixels[0])
+            mus = (torch.ones((src_feats.size()[0],src_feats.size()[1]))/src_feats.size()[1]).to(self.device)
+
+        if trg_weights is not None:
+            nus = trg_weights / trg_weights.sum(dim=1).unsqueeze(-1)
+        else:
+            nus = (torch.ones((src_feats.size()[0],trg_feats.size()[1]))/trg_feats.size()[1]).to(self.device)
+
+        ## ---- <Run Optimal Transport Algorithm> ----
+        # with torch.no_grad():
+        epsilon = eps
+        cnt = 0
+        votes = []
+        for cost, mu, nu in zip(1-sim, mus, nus):
+            while True: # see Algorithm 1
+                # PI is optimal transport plan or transport matrix.
+                PI,_,_,_ = rhm_map.perform_sinkhorn2(cost, epsilon, mu.unsqueeze(-1), nu.unsqueeze(-1)) # 4x4096x4096
+                
+                #PI = sinkhorn_stabilized(mu, nu, cost, reg=epsilon, numItermax=50, method='sinkhorn_stabilized', cuda=True)
+                if not torch.isnan(PI).any():
+                    if cnt>0:
+                        print(cnt)
+                    break
+                else: # Nan encountered caused by overflow issue is sinkhorn
+                    epsilon *= 2.0
+                    #print(epsilon)
+                    cnt += 1
+
+            #exp2 = 1.0 for spair-71k, TSS
+            #exp2 = 0.5 # for pf-pascal and pfwillow
+            PI = torch.pow(self.relu(src_feats.size()[0]*PI), exp2)
+
+            votes.append(PI.unsqueeze(0))
+
+        votes = torch.cat(votes, dim=0)
+
+        # 6. rhm
+        with torch.no_grad():
+            ncells = 8192
+            geometric_scores = []
+            nbins_x, nbins_y, hs_cellsize = rhm_map.build_hspace(src_imsize, trg_imsize, ncells)
+            bin_ids = rhm_map.hspace_bin_ids(src_imsize, src_box, trg_box, hs_cellsize, nbins_x)
+            hspace = src_box.new_zeros((votes.size()[1], nbins_y * nbins_x))
+
+            hbin_ids = bin_ids.add(torch.arange(0, votes.size()[1]).to(self.device).
+                                mul(hspace.size(1)).unsqueeze(1).expand_as(bin_ids))
+            for vote in votes:
+                new_hspace = hspace.view(-1).index_add(0, hbin_ids.view(-1), vote.view(-1)).view_as(hspace)
+                new_hspace = torch.sum(new_hspace, dim=0)
+
+                # Aggregate the voting results
+                new_hspace = F.conv2d(new_hspace.view(1, 1, nbins_y, nbins_x),
+                                self.hsfilter.unsqueeze(0).unsqueeze(0), padding=3).view(-1)
+
+                geometric_scores.append((torch.index_select(new_hspace, dim=0, index=bin_ids.view(-1)).view_as(vote)).unsqueeze(0))
+
+            geometric_scores = torch.cat(geometric_scores, dim=0)
+
+            del nbins_x, nbins_y, hs_cellsize, bin_ids, hspace, hbin_ids
+            
+            votes_geo = votes * geometric_scores
+
+        if training == "test":
+            del sim, votes
+            return votes_geo, src_box, trg_box
+        else:
+            src_center = geometry.center(src_box)
             if trg_cen:
-                trg_center = geometry.center(trg_hyperpixels[0])
+                trg_center = geometry.center(trg_box)
             else:
                 trg_center = None
             
-            return sim, votes, votes_geo, src_hyperpixels[0], trg_hyperpixels[0], self.feat_size, src_center, trg_center, src_hyperpixels[1].transpose(1,2), trg_hyperpixels[1].transpose(1,2)
+            return sim, votes, votes_geo, src_box, trg_box, self.feat_size, src_center, trg_center, None, None
 
     def extract_cam(self, img, backbone='resnet101'):
-        self.hyperpixel_ids = []
+        self.hyperpixels = []
         feat_map, fc = self.extract_intermediate_feat(img, return_hp=False, backbone=backbone)
         mask = self.get_CAM_multi2(img, feat_map, fc, sz=(img.size(2),img.size(3)), top_k=2)
         # print(mask.size(), torch.max(mask), torch.min(mask))
@@ -220,7 +289,7 @@ class SCOT_CAM(nn.Module):
             feat = self.backbone.bn1.forward(feat)
             feat = self.backbone.relu.forward(feat)
             feat = self.backbone.maxpool.forward(feat)
-            if 0 in self.hyperpixel_ids:
+            if 0 in self.hyperpixels:
                 feats.append(feat.clone()) # scaled feats
 
             # Layer 1-4
@@ -240,7 +309,7 @@ class SCOT_CAM(nn.Module):
                 
                 feat += res
 
-                if hid + 1 in self.hyperpixel_ids:
+                if hid + 1 in self.hyperpixels:
                     feats.append(feat.clone())
 
                 feat = self.backbone.__getattr__('layer%d' % lid)[bid].relu.forward(feat)
@@ -269,7 +338,7 @@ class SCOT_CAM(nn.Module):
         
 
         # scaled the features
-        for i,  (hyper_id, hyper_feat) in enumerate(zip(self.hyperpixel_ids, feats)):
+        for i,  (hyper_id, hyper_feat) in enumerate(zip(self.hyperpixels, feats)):
             feats[i] = self.learner(hyper_id, hyper_feat)
         feats = torch.cat(feats, dim=1)  # 4-dim, BCHW
 

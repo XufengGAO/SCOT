@@ -11,7 +11,7 @@ from PIL import Image
 from data import download
 from model import scot_CAM, util, geometry, evaluation, scot_CAM2
 from model.objective import Objective
-from common import supervision as sup
+from SCOT.common import loss
 from common import utils
 from common.logger import AverageMeter, Logger
 from common.evaluation import Evaluator
@@ -103,7 +103,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
             batch['pckthres'] = batch['pckthres'].to(device)
             
             # for cross-entropy loss
-            if args.supervision == "strong":
+            if args.loss == "strong_ce":
                 batch['src_kpidx'] = match_idx(batch['src_kps'], batch['n_pts'], src_center)
                 if args.trg_cen: # use trg_center
                     batch['trg_kpidx'] = match_idx(batch['trg_kps'], batch['n_pts'], trg_center)
@@ -111,7 +111,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
                     batch['trg_kpidx'] = match_idx(batch['trg_kps'], batch['n_pts'], src_center)
 
             # for flow loss
-            if args.supervision == "flow":
+            if args.loss == "flow":
                 batch['flow'] = Geometry.KpsToFlow(batch['src_kps'], batch['trg_kps'], batch['n_pts'])
 
             prd_kps_list = []
@@ -127,7 +127,7 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
                 ) # [2,2,40]
                 prd_kps_list.append(prd_kps)
 
-                eval_result = Evaluator.evaluate(prd_kps, batch, args.supervision) # return dict results
+                eval_result = Evaluator.evaluate(prd_kps, batch, args.loss) # return dict results
                 # print(len(eval_result['pck']))
                 eval_result_list.append(eval_result)
         
@@ -135,12 +135,12 @@ def train(epoch, model, dataloader, strategy, optimizer, training, args):
         loss_dict = {"sim":0, "votes":1, "votes_geo":2}
         idx = loss_dict[args.loss_stage]
 
-        if args.supervision == "strong":
+        if args.loss == "strong_ce":
             loss = strategy.compute_loss(model_outputs[idx], eval_result_list[idx], batch)
-        elif args.supervision == "flow":
+        elif args.loss == "flow":
             loss = strategy.compute_loss(model_outputs[idx], batch['flow'].to(device), feat_size)
-        elif args.supervision in ["softwarp", "hardwarp"]:
-            loss = strategy.compute_loss(model_outputs[idx], src_hf, trg_hf, args.supervision)
+        elif args.loss in ["softwarp", "hardwarp"]:
+            loss = strategy.compute_loss(model_outputs[idx], src_hf, trg_hf, args.loss)
 
 
         if training == "train":
@@ -311,8 +311,7 @@ def test(model, dataloader, args):
     return avg_pck
 
 if __name__ == "__main__":
-    
-    os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
     # Arguments parsing
     # fmt: off
     parser = argparse.ArgumentParser(description="SCOT Training Script")
@@ -321,37 +320,37 @@ if __name__ == "__main__":
     parser.add_argument('--datapath', type=str, default='./Datasets_SCOT') 
     parser.add_argument('--benchmark', type=str, default='pfpascal')
     parser.add_argument('--backbone', type=str, default='resnet50')
-    parser.add_argument('--selfsup', type=str, default='sup', choices=['sup', 'dino', 'denseCL'])
+    parser.add_argument('--selfsup', type=str, default='sup', choices=['sup', 'dino', 'denseCL'], help='supervised or self-supervised backbone')
     parser.add_argument('--thres', type=str, default='auto', choices=['auto', 'img', 'bbox'])
     parser.add_argument('--alpha', type=float, default=0.1)
     parser.add_argument('--logpath', type=str, default='')
     parser.add_argument('--split', type=str, default='trn', help='trn, val, test, old_trn, trn_val') 
 
     # Training parameters
-    parser.add_argument('--supervision', type=str, default='strong', choices=['weak', 'strong', 'flow', 'softwarp', 'hardwarp'])
+    parser.add_argument('--loss', type=str, default='strong_ce', choices=['weak', 'strong_ce', 'flow'])
     parser.add_argument('--lr', type=float, default=0.01) 
     parser.add_argument('--lr_backbone', type=float, default=0.0) 
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--start_epoch', type=int, default=0)
     parser.add_argument('--batch_size', type=int, default=4)
     parser.add_argument('--optimizer', type=str, default="sgd", choices=["sgd", "adam"])
-    parser.add_argument('--weight_decay', type=float, default=0.00,help='weight decay (default: 0.00)')
-    parser.add_argument('--momentum', type=float, default=0.9,help='momentum (default: 0.9)')
+    parser.add_argument('--weight_decay', type=float, default=0.00, help='weight decay (default: 0.00)')
+    parser.add_argument('--momentum', type=float, default=0.9, help='momentum (default: 0.9)')
     parser.add_argument("--use_scheduler", type=util.boolean_string, nargs="?", default=False)
     parser.add_argument("--scheduler", type=str, default="cycle", choices=["step", "cycle", "cosine"])
-    parser.add_argument('--step_size', type=int, default=16)
-    parser.add_argument('--step_gamma', type=float, default=0.1)
+    parser.add_argument('--step_size', type=int, default=16, help='hyperparameters for step scheduler')
+    parser.add_argument('--step_gamma', type=float, default=0.1, help='hyperparameters for step scheduler')
     
     parser.add_argument("--use_grad_clip", type=util.boolean_string, nargs="?", default=False)
-    parser.add_argument("--grad_clip", type=float, default=0.1) 
+    parser.add_argument("--grad_clip", type=float, default=0.1, help='gradient clip threshold') 
     parser.add_argument("--use_wandb", type= utils.boolean_string, nargs="?", default=False)
     parser.add_argument("--use_xavier", type= utils.boolean_string, nargs="?", default=False)
     parser.add_argument('--loss_stage', type=str, default="sim", choices=["sim", "votes", "votes_geo"])
-    parser.add_argument("--use_pretrained", type= utils.boolean_string, nargs="?", const=True, default=False)
-    parser.add_argument('--pretrained_path', type=str, default='')
+    parser.add_argument("--resume", type= utils.boolean_string, nargs="?", const=True, default=False)
+    parser.add_argument('--resume_path', type=str, default='')
     parser.add_argument('--backbone_path', type=str, default='./backbone')
-    parser.add_argument('--weight_thres', type=float, default=0.05,help='weight_thres (default: 0.05)')
-    parser.add_argument('--select_all', type=float, default=0.85,help='selec all probability (default: 1.0)')
+    parser.add_argument('--weight_thres', type=float, default=0.00, help='weight_thres (default: 0.00)')
+    parser.add_argument('--select_all', type=float, default=1.01, help='selec all probability (default: 1.0)')
     
     parser.add_argument('--img_side', type=str, default='(300)')
     parser.add_argument("--use_batch", type= utils.boolean_string, nargs="?", default=False)
@@ -368,7 +367,7 @@ if __name__ == "__main__":
     # default is the value that the attribute gets when the argument is absent. const is the value it gets when given.
 
     parser.add_argument('--run_id', type=str, default='', help='run_id')
-    parser.add_argument('--wandb_proj', type=str, default='', help='new SCOT')
+    parser.add_argument('--wandb_proj', type=str, default='', help='wandb project name')
 
     args = parser.parse_args()
 
@@ -380,7 +379,7 @@ if __name__ == "__main__":
 
     img_side = util.parse_string(args.img_side)
     if isinstance(img_side, int):
-        # use trg_center if only scale the max_side
+        # use target rhf center if only scale the max_side
         args.trg_cen = True
         args.use_batch = False
     else:
@@ -395,7 +394,7 @@ if __name__ == "__main__":
         os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
     util.fix_randseed(seed=0)
 
-    # 2. Candidate layers for hyperpixel initialization
+    # 2. Candidate layers
     n_layers = {"resnet50": 17, "resnet101": 34, "fcn101": 34}
     hyperpixels = list(range(n_layers[args.backbone]))
 
@@ -419,12 +418,12 @@ if __name__ == "__main__":
             device,
             args.cam,
             args.use_xavier,
-            weight_thres=args.weight_thres,
-            select_all=args.select_all
+            args.weight_thres,
+            args.select_all
         )
 
-    if args.use_pretrained:
-        model.load_state_dict(torch.load(args.pretrained_path, map_location=device))
+    if args.resume:
+        model.load_state_dict(torch.load(args.resume_path, map_location=device))
 
     if args.selfsup in ['dino', 'denseCL']:
         pretrained_backbone = torch.load(args.backbone_path, map_location=device)
@@ -441,14 +440,12 @@ if __name__ == "__main__":
 
     # 4. Objective (cross-entropy loss) and Optimizer
     Objective.initialize(target_rate=0.5, alpha=args.alpha)
-    if args.supervision == "weak":
-        strategy = sup.WeakSupStrategy()
-    elif args.supervision == "strong":
-        strategy = sup.StrongSupStrategy()
-    elif args.supervision == "flow":
-        strategy = sup.EPESupStrategy()
-    elif args.supervision in ["softwarp", "hardwarp"]:
-        strategy = sup.WarpSupStrategy()
+    if args.loss == "weak":
+        strategy = loss.WeakLoss()
+    elif args.loss == "strong_ce":
+        strategy = loss.StrongCELoss()
+    elif args.loss == "flow":
+        strategy = loss.StrongFlowLoss()
     else:
         raise ValueError("Unrecognized objective loss")
 
@@ -459,7 +456,7 @@ if __name__ == "__main__":
         optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     if args.use_wandb:
-        wandb_name = "%.e_%s_%s_%s"%(args.lr, args.loss_stage, args.supervision, args.optimizer)
+        wandb_name = "%.e_%s_%s_%s"%(args.lr, args.loss_stage, args.loss, args.optimizer)
         if args.use_scheduler:
             wandb_name += "_%s"%(args.scheduler)
         if args.optimizer == "sgd":
