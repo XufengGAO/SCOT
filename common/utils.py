@@ -7,6 +7,37 @@ import matplotlib.patches as patches
 from PIL import Image
 import os
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def find_knn(db_vectors, qr_vectors):
+    r"""Finds K-nearest neighbors (Euclidean distance)"""
+    # print("knn", db_vectors.unsqueeze(1).size(), qr_vectors.size())
+    # print("knn", db_vectors[-3])
+    # (3600, 40, 2), repeated centers for each rep field of each hyperpixel
+    db = db_vectors.unsqueeze(1).repeat(1, qr_vectors.size(0), 1)
+
+    # (3600, 40, 2), repeated 40 keypoints
+    qr = qr_vectors.unsqueeze(0).repeat(db_vectors.size(0), 1, 1)
+    dist = (db - qr).pow(2).sum(2).pow(0.5).t() # (40, 3600)
+    # keypoint to each center
+    # print("dist", dist.size())
+    _, nearest_idx = dist.min(dim=1) #  hyperpixel idx for each keypoint
+    # print("nea_idx", nearest_idx.size())
+    return nearest_idx
+
+def match_idx(kpss, n_ptss, rf_center):
+    r"""Samples the nearst feature (receptive field) indices"""
+    max_pts = 40
+    batch = len(kpss)
+    nearest_idxs = torch.zeros((batch, max_pts), dtype=torch.int32).to(device)
+    for idx, (kps, n_pts) in enumerate(zip(kpss, n_ptss)):
+        nearest_idx = find_knn(rf_center, kps[:,:n_pts].t())
+        nearest_idxs[idx, :n_pts] = nearest_idx
+        # nearest_idxs.append(nearest_idx.unsqueeze(0))
+    # nearest_idxs = torch.cat(nearest_idxs, dim=0)
+
+    return nearest_idxs
+
 def fix_randseed(seed):
     r"""Fixes random seed for reproducibility"""
     random.seed(seed)

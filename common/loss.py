@@ -33,18 +33,16 @@ class StrongCELoss(LossStrategy):
         r"""Returns correlation matrices of 'ALL PAIRS' in a batch"""
         return correlation_matrix.detach().clone()
 
-    def compute_loss(self, correlation_matrix, eval_result, batch):
+    def compute_loss(self, correlation_matrix, eval_result, pckthres, n_pts):
         r"""Strongly-supervised matching loss (L_{match})"""
-        easy_match = eval_result['easy_match'] # correct prediction
-        hard_match = eval_result['hard_match'] # incorrect prediction
 
-        loss_cre = Objective.weighted_cross_entropy(correlation_matrix, easy_match, hard_match, batch)
+        loss_cre = Objective.weighted_cross_entropy(correlation_matrix, eval_result['easy_match'], eval_result['hard_match'], pckthres, n_pts)
         # loss_sel = Objective.layer_selection_loss(layer_sel)
         # loss_net = loss_cre + loss_sel
 
         return loss_cre
     
-class WarpSupStrategy(LossStrategy):
+class WeakLoss(LossStrategy):
     def get_image_pair(self, batch, *args):
         r"""Returns (semantically related) pairs for strongly-supervised training"""
         return batch['src_img'].to(device), batch['trg_img'].to(device)
@@ -53,28 +51,26 @@ class WarpSupStrategy(LossStrategy):
         r"""Returns correlation matrices of 'ALL PAIRS' in a batch"""
         return correlation_matrix.detach().clone()
 
-    def compute_loss(self, correlation_matrix, src_hf, trg_hf, warp):
+    def compute_loss(self, cross_sim, src_sim, trg_sim, src_feats, trg_feats, weak_norm='l1'):
         r"""Strongly-supervised matching loss (L_{match})"""
-        if warp == "softwarp":
-            row_softmax = nn.Softmax(dim=2)
-            col_softmax = nn.Softmax(dim=1)
-        else:
-            row_softmax = nn.Identity()
-            col_softmax = nn.Identity()
+        
+        # 1. cross-entropy loss for self-correleation maps
+        # print(src_sim.size(), trg_sim.size(), src_feats.size(), trg_feats.size(), cross_sim.size())
+        disc_loss = Objective.infor_entropy(src_sim, weak_norm) + Objective.infor_entropy(trg_sim, weak_norm) + Objective.infor_entropy(cross_sim, weak_norm)
 
-        # print(src_hf.size(), trg_hf.size())
-        src_feat_norms = torch.norm(src_hf, p=2, dim=1, keepdim=True) # [4, 4096, 1]
-        trg_feat_norms = torch.norm(src_hf, p=2, dim=1, keepdim=True)# [4, 1, 4096]
-        
-        src_hf = src_hf/src_feat_norms
-        trg_hf = trg_hf/trg_feat_norms
+        src_feats = src_feats / (torch.norm(src_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10) # normalized features
+        trg_feats = trg_feats / (torch.norm(trg_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10)
 
-        loss_warp = 0.5 * ((torch.bmm(src_hf, col_softmax(correlation_matrix)) - trg_hf).norm(dim=(1,2)).mean() + \
-                (torch.bmm(trg_hf, row_softmax(correlation_matrix).transpose(1,2)) - src_hf).norm(dim=(1,2)).mean())
-        
-        print(loss_warp)
-        
-        return loss_warp
+        # 2. matching loss for features
+        softmax = nn.Softmax(dim=1)
+        src2trg_dist = torch.bmm(src_feats.transpose(1,2), softmax(cross_sim)) - trg_feats.transpose(1,2)
+        trg2src_dist = torch.bmm(trg_feats.transpose(1,2), softmax(cross_sim.transpose(1,2))) - trg_feats.transpose(1,2)
+        #src2trg_dist = src2trg_dist / (torch.norm(src2trg_dist, p=2, dim=1, keepdim=True)+ 1e-10)
+        #trg2src_dist = trg2src_dist / (torch.norm(trg2src_dist, p=2, dim=1, keepdim=True)+ 1e-10)
+
+        match_loss = 0.5 * (src2trg_dist.norm(dim=(1,2)).mean() + trg2src_dist.norm(dim=(1,2)).mean())
+
+        return disc_loss, match_loss
 
 class StrongFlowLoss(LossStrategy):
     def get_image_pair(self, batch, *args):
@@ -163,8 +159,7 @@ def soft_argmax(corr, beta=0.02, feature_size=64):
     return grid_x, grid_y
 
 
-
-class WeakLoss(LossStrategy):
+class WeakLoss2(LossStrategy):
     def get_image_pair(self, batch, *args):
         r"""Forms positive/negative image paris for weakly-supervised training"""
         training = args[0]
@@ -198,5 +193,6 @@ class WeakLoss(LossStrategy):
         loss_net = (loss_pos / loss_neg) + loss_sel
 
         return loss_net
+    
     
 

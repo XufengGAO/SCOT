@@ -15,7 +15,7 @@ import numpy as np
 
 class SCOT_CAM(nn.Module):
     r"""SCOT framework"""
-    def __init__(self, backbone, hyperpixels, benchmark, device, cam="", use_xavier=False, weight_thres=0.05, select_all=0.85):
+    def __init__(self, backbone, hyperpixels, benchmark, device, cam="", use_xavier=False, weight_thres=0.00, select_all=1.01):
         r"""Constructor for SCOT framework"""
         super(SCOT_CAM, self).__init__()
 
@@ -27,21 +27,20 @@ class SCOT_CAM(nn.Module):
             self.backbone = resnet.resnet101(pretrained=True)
             nbottlenecks = [3, 4, 23, 3]
         elif backbone == 'fcn101':
-            self.backbone = gcv.models.get_fcn_resnet101_voc(pretrained=True).to(device).pretrained
+            self.backbone = gcv.model_zoo.get_fcn_resnet101_voc(pretrained=True).to(device).pretrained
             if len(cam)==0:
-                self.backbone1 = gcv.models.get_fcn_resnet101_voc(pretrained=True)
+                self.backbone1 = gcv.model_zoo.get_fcn_resnet101_voc(pretrained=True)
                 self.backbone1.eval()
             nbottlenecks = [3, 4, 23, 3]
-        elif backbone == 'resnet34':
-            self.backbone = resnet.resnet34(pretrained=True)
-            nbottlenecks = [3, 4, 6, 3]
         else:
             raise Exception('Unavailable backbone: %s' % backbone)
         self.bottleneck_ids = reduce(add, list(map(lambda x: list(range(x)), nbottlenecks)))
         self.layer_ids = reduce(add, [[i + 1] * x for i, x in enumerate(nbottlenecks)])
+
         if len(cam) > 0: 
             print('use identity')
             self.backbone.fc = nn.Identity()
+
         self.backbone.to(device)
         self.backbone.eval()
 
@@ -57,7 +56,7 @@ class SCOT_CAM(nn.Module):
                                      16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, \
                                      16, 16, 16, 16, 32, 32, 32]).to(device)
             self.rfsz = torch.tensor([11, 19, 27, 35, 43, 59, 75, 91, 107, 139,\
-                                    171, 203, 235, 267, 299, 331, 363, 395, 427, 459, 491, 523, 555, 587,\
+                                      171, 203, 235, 267, 299, 331, 363, 395, 427, 459, 491, 523, 555, 587,\
                                       619, 651, 683, 715, 747, 779, 811, 843, 907, 971]).to(device)
         elif backbone in ['resnet50_ft', 'resnet101_ft']:
             self.jsz = torch.tensor([4, 4, 4, 4, 8, 8, 8, 8, 8, 8]).to(device)
@@ -79,12 +78,12 @@ class SCOT_CAM(nn.Module):
 
         self.select_all = select_all
 
-    def forward(self, src_img, trg_img, sim_type, exp1, exp2, eps, classmap, src_mask, trg_mask, backbone, training="traing", trg_cen=False):
+    def forward(self, src_img, trg_img, classmap, src_mask, trg_mask, backbone, model_stage="traing"):
         r"""Forward pass"""
 
         # 1. Update the hyperpixel_ids by checking the weights
         prob = torch.rand(1).item()
-        if (prob > self.select_all) and training == "train":
+        if (prob > self.select_all) and model_stage == "train":
             n_layers = {"resnet50": 17, "resnet101": 34, "fcn101": 34}
             self.hyperpixels = list(range(n_layers[backbone]))
         else:
@@ -95,38 +94,48 @@ class SCOT_CAM(nn.Module):
         self.update_jsz = self.jsz[self.hyperpixels[0]]
 
         # 3. extract hyperpixel
-        src_box, src_feats, src_imsize, src_weights = self.extract_hyperpixel(src_img, classmap, src_mask, backbone)
-        trg_box, trg_feats, trg_imsize, trg_weights = self.extract_hyperpixel(trg_img, classmap, trg_mask, backbone)
+        src = self.extract_hyperpixel(src_img, classmap, src_mask, backbone)
+        trg = self.extract_hyperpixel(trg_img, classmap, trg_mask, backbone)
 
-        src_feat_norms = torch.norm(src_feats, p=2, dim=2).unsqueeze(2) # [4, 4096, 1]
-        trg_feat_norms = torch.norm(trg_feats, p=2, dim=2).unsqueeze(1) # [4, 1, 4096]
-        # print("Norm", src_feat_norms.size(), trg_feat_norms.size()) # torch.Size([3750, 1])
+        return src, trg
 
-        sim = torch.bmm(src_feats, trg_feats.transpose(1, 2)) / (torch.bmm(src_feat_norms, trg_feat_norms) + 1e-10)
-        sim = self.relu(sim) # clamp
-        # print("sim", sim.size(), sim.max(), sim.min())
+
+    def calculate_sim(self, src_feats, trg_feats):
+        src_feats = src_feats / (torch.norm(src_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10) # normalized features
+        trg_feats = trg_feats / (torch.norm(trg_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10)
+
+        sim = self.relu(torch.bmm(src_feats, trg_feats.transpose(1, 2))) # cross-sim, source->target
+        del src_feats, trg_feats
+        return sim
+
+    def calculate_votes(self, src_feats, trg_feats, epsilon, exp2, src_size, trg_size, src_weights=None, trg_weights=None):
+        src_feats = src_feats / (torch.norm(src_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10) # normalized features
+        trg_feats = trg_feats / (torch.norm(trg_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10)
+
+        sim = self.relu(torch.bmm(src_feats, trg_feats.transpose(1, 2))) # cross-sim, source->target
+
+        costs = 1 - sim
 
         if src_weights is not None:
             mus = src_weights / src_weights.sum(dim=1).unsqueeze(-1) # normalize weights
         else:
-            mus = (torch.ones((src_feats.size()[0],src_feats.size()[1]))/src_feats.size()[1]).to(self.device)
+            mus = (torch.ones((src_size[0],src_size[1]))/src_size[1]).to(self.device)
 
         if trg_weights is not None:
             nus = trg_weights / trg_weights.sum(dim=1).unsqueeze(-1)
         else:
-            nus = (torch.ones((src_feats.size()[0],trg_feats.size()[1]))/trg_feats.size()[1]).to(self.device)
+            nus = (torch.ones((src_size[0],trg_size[1]))/trg_size[1]).to(self.device)
+
+        del src_weights, trg_weights
 
         ## ---- <Run Optimal Transport Algorithm> ----
-        # with torch.no_grad():
-        epsilon = eps
         cnt = 0
         votes = []
-        for cost, mu, nu in zip(1-sim, mus, nus):
+        for cost, mu, nu in zip(costs, mus, nus):
             while True: # see Algorithm 1
                 # PI is optimal transport plan or transport matrix.
-                PI,_,_,_ = rhm_map.perform_sinkhorn2(cost, epsilon, mu.unsqueeze(-1), nu.unsqueeze(-1)) # 4x4096x4096
+                PI = rhm_map.perform_sinkhorn2(cost, epsilon, mu.unsqueeze(-1), nu.unsqueeze(-1)) # 4x4096x4096
                 
-                #PI = sinkhorn_stabilized(mu, nu, cost, reg=epsilon, numItermax=50, method='sinkhorn_stabilized', cuda=True)
                 if not torch.isnan(PI).any():
                     if cnt>0:
                         print(cnt)
@@ -138,12 +147,16 @@ class SCOT_CAM(nn.Module):
 
             #exp2 = 1.0 for spair-71k, TSS
             #exp2 = 0.5 # for pf-pascal and pfwillow
-            PI = torch.pow(self.relu(src_feats.size()[0]*PI), exp2)
+            PI = torch.pow(self.relu(src_size[1]*PI), exp2)
 
             votes.append(PI.unsqueeze(0))
+        del mus, nus, src_feats, trg_feats
 
         votes = torch.cat(votes, dim=0)
 
+        return votes
+
+    def calculate_votesGeo(self, votes, src_imsize, trg_imsize, src_box, trg_box):
         # 6. rhm
         with torch.no_grad():
             ncells = 8192
@@ -166,21 +179,10 @@ class SCOT_CAM(nn.Module):
 
             geometric_scores = torch.cat(geometric_scores, dim=0)
 
-            del nbins_x, nbins_y, hs_cellsize, bin_ids, hspace, hbin_ids
-            
-            votes_geo = votes * geometric_scores
-
-        if training == "test":
-            del sim, votes
-            return votes_geo, src_box, trg_box
-        else:
-            src_center = geometry.center(src_box)
-            if trg_cen:
-                trg_center = geometry.center(trg_box)
-            else:
-                trg_center = None
-            
-            return sim, votes, votes_geo, src_box, trg_box, self.feat_size, src_center, trg_center, None, None
+        votes_geo = votes * geometric_scores
+        del nbins_x, nbins_y, hs_cellsize, bin_ids, hspace, hbin_ids, new_hspace, votes
+        
+        return votes_geo
 
     def extract_cam(self, img, backbone='resnet101'):
         self.hyperpixels = []
@@ -216,14 +218,7 @@ class SCOT_CAM(nn.Module):
         hyperfeats = hyperfeats.view(hyperfeats.size()[0], hyperfeats.size()[1], -1).transpose(1, 2)
         # print(hyperfeats.size(), len(hyperfeats))
 
-        # Prune boxes on margins (Otherwise may cause error)
-        if self.benchmark in ['TSS']:
-            hpgeometry, valid_ids = geometry.prune_margin(hpgeometry, img.size()[1:], 10)
-            hyperfeats = hyperfeats[valid_ids, :]
-
-
         # len return 1st dim
-        # weight: (4, 4096, 1)
         weights = torch.ones(len(hyperfeats), hyperfeats.size()[1]).to(hyperfeats.device)
         # print(weights.size())
 
@@ -234,17 +229,7 @@ class SCOT_CAM(nn.Module):
                 if backbone=='fcn101':
                     mask = self.get_FCN_map(img, feat_map, fc, sz=(img.size(2),img.size(3)))
                 else:
-                    mask = self.get_CAM_multi(img, feat_map, fc, sz=(img.size(2),img.size(3)), top_k=2)
-                    # mask = []
-                    # for im, fm, fc in zip(img, feat_map, fc):
-                    #     ms = self.get_CAM_multi2(im.unsqueeze(0), fm.unsqueeze(0), fc.unsqueeze(0), sz=(img.size(2),img.size(3)), top_k=2)
-                    #     mask.append(ms)
-                    # if len(mask) > 1:
-                    #     mask = torch.stack(mask, dim=0)
-                    # else:
-                    #     mask = mask[0].unsqueeze(0)
-
-                    # print(torch.sum((masks- mask)>1e-3))                    
+                    mask = self.get_CAM_multi(img, feat_map, fc, sz=(img.size(2),img.size(3)), top_k=2)                 
             scale = 1.0
             
             hpos = geometry.center(hpgeometry) # 4096 2
@@ -259,15 +244,16 @@ class SCOT_CAM(nn.Module):
             weights[hselect>0.5*scale] = 0.9
             weights[hselect>0.6*scale] = 1.0
 
-            del hpos
-            del hselect
+            del hpos, hselect
             
         # print('no-clasmap', weights.size())
         # print(img.size())
         # print(img.size()[2:][::-1], weights.unsqueeze(-1).size())
 
-        return hpgeometry, hyperfeats, img.size()[2:][::-1], weights
-
+        
+        results = {'box':hpgeometry, 'feats':hyperfeats, 'imsize':img.size()[2:][::-1], 'weights':weights}
+        del hpgeometry, hyperfeats, weights
+        return results
 
     def extract_intermediate_feat(self, img, return_hp=True, backbone='resnet101'):
         r"""Extract desired a list of intermediate features \
@@ -290,7 +276,7 @@ class SCOT_CAM(nn.Module):
             feat = self.backbone.relu.forward(feat)
             feat = self.backbone.maxpool.forward(feat)
             if 0 in self.hyperpixels:
-                feats.append(feat.clone()) # scaled feats
+                feats.append(feat) # scaled feats
 
             # Layer 1-4
             for hid, (bid, lid) in enumerate(zip(self.bottleneck_ids, self.layer_ids)):
@@ -310,7 +296,7 @@ class SCOT_CAM(nn.Module):
                 feat += res
 
                 if hid + 1 in self.hyperpixels:
-                    feats.append(feat.clone())
+                    feats.append(feat)
 
                 feat = self.backbone.__getattr__('layer%d' % lid)[bid].relu.forward(feat)
 
@@ -347,7 +333,6 @@ class SCOT_CAM(nn.Module):
 
         # return 3-dim tensor, cause B=1
         return feats, feat_map, fc
-    
 
     def get_CAM(self, feat_map, fc, sz, top_k=2):
         logits = F.softmax(fc, dim=1)
@@ -367,7 +352,6 @@ class SCOT_CAM(nn.Module):
         output_cam = output_cam.max(dim=0)[0] # HxW
 
         return output_cam
-
 
     def get_CAM_multi2(self, img, feat_map, fc, sz, top_k=2):
         scales = [1.0,1.5,2.0]
@@ -402,7 +386,6 @@ class SCOT_CAM(nn.Module):
 
         return norm_cam
     
-    
     def get_CAM_multi(self, img, feat_map, fc, sz, top_k=2):
         # img = Bx3x256x256
         # featmap = Bx2048x8x8
@@ -434,22 +417,23 @@ class SCOT_CAM(nn.Module):
             cam_max = cam_max.unsqueeze(-1)
             cam = (cam-cam_min)/cam_max # Bx2x240x240
             output_cam = cam.max(dim=1)[0] # Bx240x240
-
             map_list.append(output_cam)
+
+            del output_cam, cam
 
         map_list = torch.stack(map_list,dim=0) # 3xBx240x240
         sum_cam = map_list.sum(dim=0) # Bx240x240
         sum_cam_max = sum_cam.view(bz,-1).max(dim=-1,keepdim=True)[0].unsqueeze(-1)
-        norm_cam = sum_cam / (sum_cam_max+1e-5) # Bx240x240
+        norm_cam = sum_cam / (sum_cam_max+1e-10) # Bx240x240
         # print(map_list.size(), sum_cam.size(), sum_cam_max.size(), norm_cam.size())
         # transform = T.ToPILImage()
         # for idx, outputcam in enumerate(norm_cam):
         #     imgm = transform(outputcam)
         #     file_name = "{}".format(idx)
         #     imgm.save("/home/xufeng/Documents/EPFL_Course/sp_code/SCOT/img/{}.png".format(file_name))
-        
-        return norm_cam
+        del map_list, sum_cam, sum_cam_max
 
+        return norm_cam
 
     def get_FCN_map(self, img, feat_map, fc, sz):
         #scales = [1.0,1.5,2.0]

@@ -36,7 +36,7 @@ class Evaluator:
             # pck_ids.append({'correct_ids':correct_ids, 'incorrect_ids':incorrect_ids})
             pck_ids[idx, correct_ids] = 1
             # Collect easy and hard match feature index & store pck to buffer
-            if supervision == "strong":
+            if supervision == "strong_ce":
                 easy_match['dist'].append(correct_dist)
                 # for each keypoint, we find its nearest neighbour of center of receptive field
                 # then kpidx is the id of hyperpixel
@@ -46,11 +46,13 @@ class Evaluator:
                 hard_match['trg'].append(batch['trg_kpidx'][idx][:npt][incorrect_ids])
             pck.append(int(ncorrt)/int(npt))
             # print(int(ncorrt)/int(npt))
+            del correct_dist, correct_ids, incorrect_ids, ncorrt
         
         eval_result = {'easy_match': easy_match,
                        'hard_match': hard_match,
                        'pck': pck, 
                        'pck_ids': pck_ids}
+        del pck_ids
         
         return eval_result
 
@@ -68,5 +70,7 @@ class Evaluator:
         incorrect_ids = utils.where(correct_pts == 0)
         correct_dist = l2dist[correct_pts]
 
-        return correct_dist, correct_ids, incorrect_ids, torch.sum(correct_pts)
+        del l2dist, thres
+
+        return correct_dist, correct_ids, incorrect_ids, int(torch.sum(correct_pts))
 

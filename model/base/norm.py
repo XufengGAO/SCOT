@@ -19,6 +19,14 @@ class Norm:
         return x / vector_sum
 
     @classmethod
+    def linearnormalize(cls, x):
+        r"""linear normalization"""
+        vectore_max = torch.max(x, dim=1, keepdim=True)
+        vectore_min = torch.max(x, dim=1, keepdim=True)
+
+        return (x - vectore_min)/(vectore_max - vectore_min + 1e-30)
+
+    @classmethod
     def unit_gaussian_normalize(cls, x):
         r"""Make each (row) distribution into unit gaussian"""
         correlation_matrix = x - x.mean(dim=2).unsqueeze(2).expand_as(x)

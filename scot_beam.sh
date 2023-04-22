@@ -3,29 +3,29 @@
 set -x
 
 benchmark="pfpascal"
-backbone="resnet101"
+backbone="resnet50"
 # -m torch.utils.bottleneck
 python train.py \
     --benchmark $benchmark \
     --backbone $backbone \
     --weight_thres 0.10 \
     --select_all 0.90 \
-    --supervision 'strong'\
+    --loss 'weak'\
     --alpha 0.1 \
     --lr 0.001 \
     --momentum 0.9 \
     --epochs 100 \
-    --batch_size 1 \
+    --batch_size 2 \
     --optimizer 'sgd' \
     --exp1 1.0 \
     --exp2 0.5 \
     --classmap 1 \
-    --use_wandb True \
-    --use_xavier False \
-    --use_scheduler False \
-    --use_grad_clip False \
-    --loss_stage "votes" \
-    --split "trn"
+    --use_wandb False \
+    --loss_stage "sim" \
+    --split "trn" \
+    --cam "mask/resnet50/200_300" \
+    --img_side '(200,300)' 
+
     # --use_pretrained True \
     # --pretrained_path "./logs/3e-03_votes_strong_sgd_m0.90_supervised_resnet101.log/best_model.pt"\
     # --run_id '1j2qjgkr' \

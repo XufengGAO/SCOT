@@ -72,8 +72,8 @@ def perform_sinkhorn2(C,epsilon,mu,nu,a=[],warm=False,niter=1,tol=10e-9):
 
         PI = torch.mm(torch.mm(torch.diag(a[:,-1]),K), torch.diag(b[:,-1]))
 
-    # del a; del b; del K
-    return PI,mu,nu,Err
+    del a; del b; del K
+    return PI
 
 def appearance_similarity(src_feats, trg_feats, exp1=3):
     r"""Semantic appearance similarity (exponentiated cosine)"""
