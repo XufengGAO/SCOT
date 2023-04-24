@@ -34,13 +34,13 @@ class Logger:
             cls.logpath = os.path.join('logs', 'test', args.backbone, args.selfsup, args.loss, args.benchmark, args.logpath)
             filemode = 'w'
         
-        # if dist.get_rank in [-1, 0]:
-        os.makedirs(cls.logpath, exist_ok=True)
+        if dist.get_rank == 0:
+            os.makedirs(cls.logpath, exist_ok=True)
   
 
         logging.basicConfig(filemode=filemode,
                             filename=os.path.join(cls.logpath, 'log.txt'),
-                            level=logging.INFO, # if dist.get_rank() in [-1, 0] else logging.WARN
+                            level=logging.INFO if dist.get_rank() in [-1, 0] else logging.WARN,
                             format='%(message)s',
                             datefmt='%m-%d %H:%M:%S')
 
@@ -106,8 +106,7 @@ class AverageMeter:
         r"""Compute percentage of correct key-points (PCK) based on prediction"""
         pckthres = data['pckthres'][0] 
         # ncorrt = correct_kps(data['trg_kps'].cuda(), prd_kps, pckthres, data['alpha'])
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        ncorrt = correct_kps(data['trg_kps'][0].to(device), prd_kps, pckthres.to(device), alpha)
+        ncorrt = correct_kps(data['trg_kps'][0].to(prd_kps.device), prd_kps, pckthres.to(prd_kps.device), alpha)
         # print(int(ncorrt), data['n_pts'], data['trg_kps'].size(), data['n_pts'].is_cuda)
         pair_pck = int(ncorrt) / int(data['n_pts'].item())
         

@@ -205,7 +205,7 @@ def train(epoch, model, dataloader, loss_func, optimizer, args):
     avg_loss = utils.mean(average_meter.loss_buffer)
     avg_pck = {'sim':0, 'votes':0, 'votes_geo':0}
     for key in ['sim', 'votes', 'votes_geo']:
-        avg_pck[key] = utils.mean(average_meter.buffer[key]["pck"])
+        avg_pck[key] = utils.mean(average_meter.buffer[key])
 
     return avg_loss, avg_pck
 
@@ -243,6 +243,11 @@ def validate(epoch, model, dataloader, args):
 
         # {'box', 'feats', 'imsize', 'weights'}
         # 2. collect results   
+        if args.loss == "strong_ce":
+            src_center = geometry.center(src['box'])
+            trg_center = geometry.center(trg['box'])
+            data['src_kpidx'] = utils.match_idx(data['src_kps'], data['n_pts'], src_center)    
+            data['trg_kpidx'] = utils.match_idx(data['trg_kps'], data['n_pts'], trg_center)
         prd_kps_list = {}
         eval_result_list = {}
         sim = model.calculate_sim(src['feats'], trg['feats'])
