@@ -89,8 +89,8 @@ class SCOT_CAM(nn.Module):
             self.hyperpixels = self.learner.return_hyperpixel_ids()
 
         # 2. Update receptive field size
-        self.update_rfsz = self.rfsz[self.hyperpixels[0]]
-        self.update_jsz = self.jsz[self.hyperpixels[0]]
+        self.update_rfsz = self.rfsz[self.hyperpixels[0]].to(src_img.device)
+        self.update_jsz = self.jsz[self.hyperpixels[0]].to(src_img.device)
 
         # 3. extract hyperpixel
         src = self.extract_hyperpixel(src_img, classmap, src_mask, backbone)
@@ -164,15 +164,15 @@ class SCOT_CAM(nn.Module):
             bin_ids = rhm_map.hspace_bin_ids(src_imsize, src_box, trg_box, hs_cellsize, nbins_x)
             hspace = src_box.new_zeros((votes.size()[1], nbins_y * nbins_x))
 
-            hbin_ids = bin_ids.add(torch.arange(0, votes.size()[1]).
+            hbin_ids = bin_ids.add(torch.arange(0, votes.size()[1]).to(votes.device).
                                 mul(hspace.size(1)).unsqueeze(1).expand_as(bin_ids))
             for vote in votes:
                 new_hspace = hspace.view(-1).index_add(0, hbin_ids.view(-1), vote.view(-1)).view_as(hspace)
-                new_hspace = torch.sum(new_hspace, dim=0)
+                new_hspace = torch.sum(new_hspace, dim=0).to(votes.device)
 
                 # Aggregate the voting results
                 new_hspace = F.conv2d(new_hspace.view(1, 1, nbins_y, nbins_x),
-                                self.hsfilter.unsqueeze(0).unsqueeze(0), padding=3).view(-1)
+                                self.hsfilter.to(votes.device).unsqueeze(0).unsqueeze(0), padding=3).view(-1)
 
                 geometric_scores.append((torch.index_select(new_hspace, dim=0, index=bin_ids.view(-1)).view_as(vote)).unsqueeze(0))
 
