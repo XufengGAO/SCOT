@@ -7,8 +7,6 @@ import matplotlib.patches as patches
 from PIL import Image
 import os
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 def find_knn(db_vectors, qr_vectors):
     r"""Finds K-nearest neighbors (Euclidean distance)"""
     # print("knn", db_vectors.unsqueeze(1).size(), qr_vectors.size())
@@ -29,12 +27,10 @@ def match_idx(kpss, n_ptss, rf_center):
     r"""Samples the nearst feature (receptive field) indices"""
     max_pts = 40
     batch = len(kpss)
-    nearest_idxs = torch.zeros((batch, max_pts), dtype=torch.int32).to(device)
+    nearest_idxs = torch.zeros((batch, max_pts), dtype=torch.int32).to(rf_center.device)
     for idx, (kps, n_pts) in enumerate(zip(kpss, n_ptss)):
         nearest_idx = find_knn(rf_center, kps[:,:n_pts].t())
         nearest_idxs[idx, :n_pts] = nearest_idx
-        # nearest_idxs.append(nearest_idx.unsqueeze(0))
-    # nearest_idxs = torch.cat(nearest_idxs, dim=0)
 
     return nearest_idxs
 

@@ -11,7 +11,7 @@ from model.base.geometry import Geometry
 
 class CorrespondenceDataset(Dataset):
     r"""Parent class of PFPascal, PFWillow, Caltech, and SPair""" # imside = (H, W)
-    def __init__(self, benchmark, datapath, thres, device, split, imside=(256,256), use_resize=False, use_batch=False):
+    def __init__(self, benchmark, datapath, thres, split, imside=(256,256), use_resize=False, use_batch=False):
         r"""CorrespondenceDataset constructor"""
         super(CorrespondenceDataset, self).__init__()
 
@@ -67,7 +67,6 @@ class CorrespondenceDataset(Dataset):
                                             transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                                 std=[0.229, 0.224, 0.225])
                                             ])
-        self.device = device
         self.split = split
 
         # To get initialized in subclass constructors

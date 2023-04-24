@@ -4,11 +4,8 @@ import logging
 import os
 
 from tensorboardX import SummaryWriter
-import matplotlib.pyplot as plt
-import pandas as pd
-import numpy as np
 import torch
-
+from torch import distributed as dist
 
 class Logger:
     r"""Writes results of training/testing"""
@@ -36,12 +33,14 @@ class Logger:
             # logtime = datetime.datetime.now().__format__('_%m%d_%H%M%S')
             cls.logpath = os.path.join('logs', 'test', args.backbone, args.selfsup, args.loss, args.benchmark, args.logpath)
             filemode = 'w'
-
+        
+        # if dist.get_rank in [-1, 0]:
         os.makedirs(cls.logpath, exist_ok=True)
+  
 
         logging.basicConfig(filemode=filemode,
                             filename=os.path.join(cls.logpath, 'log.txt'),
-                            level=logging.INFO,
+                            level=logging.INFO, # if dist.get_rank() in [-1, 0] else logging.WARN
                             format='%(message)s',
                             datefmt='%m-%d %H:%M:%S')
 
@@ -88,24 +87,17 @@ class AverageMeter:
             'spair':    {'pck': [], 'cls_pck': dict()}
         }
         self.eval_buf = self.eval_buf[benchmark]
-
+        
+        # buffer for average pck
+        self.buffer = {'sim':[], 'votes':[], 'votes_geo':[]}
+        
         if cls is not None:
-            self.buffer_keys = ['pck']
-
-            # buffer for average pck
-            self.buffer = {'sim':{}, 'votes':{}, 'votes_geo':{}}
-            for key in self.buffer_keys:
-                self.buffer['sim'][key] = []
-                self.buffer['votes'][key] = []
-                self.buffer['votes_geo'][key] = []
-
             # buffer for class-pck
-            self.sel_buffer = {'sim':{}, 'votes':{}, 'votes_geo':{}}
-            for sub_cls in cls:
-                if self.sel_buffer.get(sub_cls) is None:
-                    self.sel_buffer['sim'][sub_cls] = []
-                    self.sel_buffer['votes'][sub_cls] = []
-                    self.sel_buffer['votes_geo'][sub_cls] = []
+            self.cls_buffer = {'sim':{}, 'votes':{}, 'votes_geo':{}}
+            for sub_cls in cls:                
+                self.cls_buffer['sim'][sub_cls] = []
+                self.cls_buffer['votes'][sub_cls] = []
+                self.cls_buffer['votes_geo'][sub_cls] = []
 
             # buffer for loss
             self.loss_buffer = []
@@ -139,18 +131,19 @@ class AverageMeter:
         return pck
     
     def update(self, eval_result_list, category, loss=None):
-        for key in self.buffer_keys: # all pck terms
-            self.buffer['sim'][key] += eval_result_list[0][key]
-            self.buffer['votes'][key] += eval_result_list[1][key]
-            self.buffer['votes_geo'][key] += eval_result_list[2][key]
-        eval_name = ['sim', 'votes', 'votes_geo']
-        for key in self.buffer_keys: # per-class pck term
-            for idx, eval_result in enumerate(eval_result_list):
-                for eval_cls, cls in zip(eval_result[key], category):
-                    if self.sel_buffer.get(cls) is None:
-                        self.sel_buffer[eval_name[idx]][cls] = []
-                    self.sel_buffer[eval_name[idx]][cls] += [eval_cls]
+      
+        self.buffer['sim'] += [eval_result_list['sim']]
+        self.buffer['votes'] += [eval_result_list['votes']]
+        self.buffer['votes_geo'] += [eval_result_list['votes_geo']]
 
+        # eval_name = ['sim', 'votes', 'votes_geo']
+        # for key in self.cls_buffer: # per-class pck term
+        #     for idx, eval_result in enumerate(eval_result_list):
+        #         for eval_cls, cls in zip(eval_result[key], category):
+        #             if self.cls_buffer.get(cls) is None:
+        #                 self.cls_buffer[eval_name[idx]][cls] = []
+        #             self.cls_buffer[eval_name[idx]][cls] += [eval_cls]
+        
         if loss is not None: # mean loss term
             self.loss_buffer.append(loss)
 
@@ -161,11 +154,10 @@ class AverageMeter:
         if len(self.loss_buffer) > 0:
             msg += 'Loss: %5.4f  ' % (sum(self.loss_buffer) / len(self.loss_buffer))
 
-        for key in self.buffer_keys:
-            msg += '%s in buf: sim=%4.4f, votes=%4.4f, votes_geo=%4.4f' % (key.upper(), 
-                                                                               sum(self.buffer['sim'][key]) / len(self.buffer['sim'][key]),
-                                                                               sum(self.buffer['votes'][key]) / len(self.buffer['votes'][key]),
-                                                                               sum(self.buffer['votes_geo'][key]) / len(self.buffer['votes_geo'][key]),)
+        msg += 'PCK in buf: sim=%4.4f, votes=%4.4f, votes_geo=%4.4f' % ( 
+                                                                        sum(self.buffer['sim']) / len(self.buffer['sim']),
+                                                                        sum(self.buffer['votes']) / len(self.buffer['votes']),
+                                                                        sum(self.buffer['votes_geo']) / len(self.buffer['votes_geo']),)
 
         msg += '***\n'
         Logger.info(msg)
@@ -177,11 +169,11 @@ class AverageMeter:
             msg += 'Loss (last sample): %6.4f  ' % self.loss_buffer[-1]
             msg += 'Avg Loss: %6.5f  ' % (sum(self.loss_buffer) / len(self.loss_buffer))
 
-        for key in self.buffer_keys:
-            msg += 'Avg %s: sim=%4.4f, votes=%4.4f, votes_geo=%4.4f' % (key.upper(), 
-                                                                               sum(self.buffer['sim'][key]) / len(self.buffer['sim'][key]),
-                                                                               sum(self.buffer['votes'][key]) / len(self.buffer['votes'][key]),
-                                                                               sum(self.buffer['votes_geo'][key]) / len(self.buffer['votes_geo'][key]),)
+
+        msg += 'Avg PCK: sim=%4.4f, votes=%4.4f, votes_geo=%4.4f' % ( 
+                                                                    sum(self.buffer['sim']) / len(self.buffer['sim']),
+                                                                    sum(self.buffer['votes']) / len(self.buffer['votes']),
+                                                                    sum(self.buffer['votes_geo']) / len(self.buffer['votes_geo']),)
 
         Logger.info(msg)
 

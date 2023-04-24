@@ -10,7 +10,7 @@ python train.py \
     --backbone $backbone \
     --weight_thres 0.10 \
     --select_all 0.90 \
-    --loss 'weak'\
+    --loss 'strong_ce'\
     --alpha 0.1 \
     --lr 0.001 \
     --momentum 0.9 \

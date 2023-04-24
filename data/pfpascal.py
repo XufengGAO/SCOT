@@ -12,9 +12,9 @@ from PIL import Image
 
 class PFPascalDataset(CorrespondenceDataset):
     r"""Inherits CorrespondenceDataset"""
-    def __init__(self, benchmark, datapath, thres, device, split, cam, imside=(200,300), use_resize=False, use_batch=False):
+    def __init__(self, benchmark, datapath, thres, split, cam, imside=(200,300), use_resize=False, use_batch=False):
         r"""PF-PASCAL dataset constructor"""
-        super(PFPascalDataset, self).__init__(benchmark, datapath, thres, device, split, imside, use_resize, use_batch)
+        super(PFPascalDataset, self).__init__(benchmark, datapath, thres, split, imside, use_resize, use_batch)
 
         self.train_data = pd.read_csv(self.spt_path) # dataframe
         self.src_imnames = np.array(self.train_data.iloc[:, 0])

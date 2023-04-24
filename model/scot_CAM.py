@@ -15,7 +15,7 @@ import numpy as np
 
 class SCOT_CAM(nn.Module):
     r"""SCOT framework"""
-    def __init__(self, backbone, hyperpixels, benchmark, device, cam="", use_xavier=False, weight_thres=0.00, select_all=1.01):
+    def __init__(self, backbone, hyperpixels, benchmark, cam="", use_xavier=False, weight_thres=0.00, select_all=1.01):
         r"""Constructor for SCOT framework"""
         super(SCOT_CAM, self).__init__()
 
@@ -27,7 +27,7 @@ class SCOT_CAM(nn.Module):
             self.backbone = resnet.resnet101(pretrained=True)
             nbottlenecks = [3, 4, 23, 3]
         elif backbone == 'fcn101':
-            self.backbone = gcv.model_zoo.get_fcn_resnet101_voc(pretrained=True).to(device).pretrained
+            self.backbone = gcv.model_zoo.get_fcn_resnet101_voc(pretrained=True)
             if len(cam)==0:
                 self.backbone1 = gcv.model_zoo.get_fcn_resnet101_voc(pretrained=True)
                 self.backbone1.eval()
@@ -41,7 +41,7 @@ class SCOT_CAM(nn.Module):
             print('use identity')
             self.backbone.fc = nn.Identity()
 
-        self.backbone.to(device)
+        self.backbone
         self.backbone.eval()
 
         self.hyperpixels = hyperpixels
@@ -49,29 +49,28 @@ class SCOT_CAM(nn.Module):
         # Hyperpixel id and pre-computed jump and receptive field size initialization
         # (the jump and receptive field sizes for 'fcn101' are heuristic values)
         if backbone in ['resnet50']:
-            self.jsz = torch.tensor([4, 4, 4, 4, 8, 8, 8, 8, 16, 16, 16, 16, 16, 16, 32, 32, 32]).to(device)
-            self.rfsz = torch.tensor([11, 19, 27, 35, 43, 59, 75, 91, 107, 139, 171, 203, 235, 267, 299, 363, 427]).to(device)
+            self.jsz = torch.tensor([4, 4, 4, 4, 8, 8, 8, 8, 16, 16, 16, 16, 16, 16, 32, 32, 32])
+            self.rfsz = torch.tensor([11, 19, 27, 35, 43, 59, 75, 91, 107, 139, 171, 203, 235, 267, 299, 363, 427])
         elif backbone in ['resnet101']:
             self.jsz = torch.tensor([4, 4, 4, 4, 8, 8, 8, 8, 16, 16, \
                                      16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, \
-                                     16, 16, 16, 16, 32, 32, 32]).to(device)
+                                     16, 16, 16, 16, 32, 32, 32])
             self.rfsz = torch.tensor([11, 19, 27, 35, 43, 59, 75, 91, 107, 139,\
                                       171, 203, 235, 267, 299, 331, 363, 395, 427, 459, 491, 523, 555, 587,\
-                                      619, 651, 683, 715, 747, 779, 811, 843, 907, 971]).to(device)
+                                      619, 651, 683, 715, 747, 779, 811, 843, 907, 971])
         elif backbone in ['resnet50_ft', 'resnet101_ft']:
-            self.jsz = torch.tensor([4, 4, 4, 4, 8, 8, 8, 8, 8, 8]).to(device)
-            self.rfsz = torch.tensor([11, 19, 27, 35, 43, 59, 75, 91, 107, 139]).to(device)
+            self.jsz = torch.tensor([4, 4, 4, 4, 8, 8, 8, 8, 8, 8])
+            self.rfsz = torch.tensor([11, 19, 27, 35, 43, 59, 75, 91, 107, 139])
         else:
-            self.jsz = torch.tensor([4, 4, 4, 4, 8, 8, 8, 8, 8, 8]).to(device)
-            self.rfsz = torch.tensor([11, 19, 27, 35, 43, 59, 75, 91, 107, 139]).to(device)
+            self.jsz = torch.tensor([4, 4, 4, 4, 8, 8, 8, 8, 8, 8])
+            self.rfsz = torch.tensor([11, 19, 27, 35, 43, 59, 75, 91, 107, 139])
 
         # Miscellaneous
-        self.hsfilter = geometry.gaussian2d(7).to(device)
-        self.device = device
+        self.hsfilter = geometry.gaussian2d(7)
         self.benchmark = benchmark
 
         # weighted module
-        self.learner = gating.DynamicFeatureSelection(hyperpixels, use_xavier, weight_thres).to(device)
+        self.learner = gating.DynamicFeatureSelection(hyperpixels, use_xavier, weight_thres)
         self.feat_size = (64, 64)
 
         self.relu = nn.ReLU(inplace=True)
@@ -119,12 +118,12 @@ class SCOT_CAM(nn.Module):
         if src_weights is not None:
             mus = src_weights / src_weights.sum(dim=1).unsqueeze(-1) # normalize weights
         else:
-            mus = (torch.ones((src_size[0],src_size[1]))/src_size[1]).to(self.device)
+            mus = (torch.ones((src_size[0],src_size[1]))/src_size[1])
 
         if trg_weights is not None:
             nus = trg_weights / trg_weights.sum(dim=1).unsqueeze(-1)
         else:
-            nus = (torch.ones((src_size[0],trg_size[1]))/trg_size[1]).to(self.device)
+            nus = (torch.ones((src_size[0],trg_size[1]))/trg_size[1])
 
         del src_weights, trg_weights
 
@@ -165,7 +164,7 @@ class SCOT_CAM(nn.Module):
             bin_ids = rhm_map.hspace_bin_ids(src_imsize, src_box, trg_box, hs_cellsize, nbins_x)
             hspace = src_box.new_zeros((votes.size()[1], nbins_y * nbins_x))
 
-            hbin_ids = bin_ids.add(torch.arange(0, votes.size()[1]).to(self.device).
+            hbin_ids = bin_ids.add(torch.arange(0, votes.size()[1]).
                                 mul(hspace.size(1)).unsqueeze(1).expand_as(bin_ids))
             for vote in votes:
                 new_hspace = hspace.view(-1).index_add(0, hbin_ids.view(-1), vote.view(-1)).view_as(hspace)
@@ -210,7 +209,7 @@ class SCOT_CAM(nn.Module):
         # feature extrac torch.Size([4, 15168, 64, 64]) 
         # torch.Size([4, 2048, 8, 8]) torch.Size([4, 1000])
         
-        hpgeometry = geometry.receptive_fields(self.update_rfsz, self.update_jsz, hyperfeats.size()).to(self.device)
+        hpgeometry = geometry.receptive_fields(self.update_rfsz, self.update_jsz, hyperfeats.size())
         # print('hpgeometry', hpgeometry.size())
         # torch.Size([4096, 4])
 
