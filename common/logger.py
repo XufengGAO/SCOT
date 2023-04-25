@@ -22,9 +22,9 @@ class Logger:
                 if args.use_scot2:
                     logpath = logpath + "_scot2"   
                     
-                logpath = logpath + "_%s_bsz%d"%(args.split, args.batch_size)
-                
-                cls.logpath = os.path.join('logs', 'train', args.backbone, args.selfsup, args.loss, args.benchmark + "_%s"%(args.alpha), logpath)
+                logpath = logpath + "_%s_bsz%d"%(args.split, args.batch_size*args.world_size)
+
+                cls.logpath = os.path.join('logs', 'ddp', 'train', args.backbone, args.selfsup, args.loss, args.benchmark + "_%s"%(args.alpha), logpath)
                 filemode = 'w'
             else:
                 cls.logpath = args.logpath
@@ -34,13 +34,13 @@ class Logger:
             cls.logpath = os.path.join('logs', 'test', args.backbone, args.selfsup, args.loss, args.benchmark, args.logpath)
             filemode = 'w'
         
-        if dist.get_rank == 0:
+        if dist.get_rank() == 0:
             os.makedirs(cls.logpath, exist_ok=True)
   
 
         logging.basicConfig(filemode=filemode,
                             filename=os.path.join(cls.logpath, 'log.txt'),
-                            level=logging.INFO if dist.get_rank() in [-1, 0] else logging.WARN,
+                            level=logging.INFO if dist.get_rank()==0 else logging.WARN,
                             format='%(message)s',
                             datefmt='%m-%d %H:%M:%S')
 

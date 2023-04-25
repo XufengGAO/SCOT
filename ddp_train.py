@@ -39,7 +39,7 @@ def all_reduce_results(results):
         values.append(v)
 
     # Peform the actual coalesced all_reduce
-    values = torch.cat([torch.tensor(v) for v in values], dim=0)
+    values = torch.stack([torch.tensor(v) for v in values], dim=0).cuda()
     dist.all_reduce(values, dist.ReduceOp.SUM)
     values.div_(dist.get_world_size())
     values = torch.chunk(values, values.size(0), dim=0)
@@ -50,7 +50,7 @@ def all_reduce_results(results):
 def train(epoch, model, dataloader, loss_func, optimizer, args, device):
     r"""Code for training SCOT"""
  
-    model.train()
+    model.module.train()
     dataloader.sampler.set_epoch(epoch)
 
     average_meter = AverageMeter(args.benchmark, dataloader.dataset.cls)
@@ -61,7 +61,7 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device):
     for step, data in enumerate(dataloader):
         optimizer.zero_grad()
         iters = step + epoch * total_steps
-        if args.use_wandb:
+        if args.use_wandb and dist.get_rank()==0:
             wandb.log({'iters':iters})
 
         data['src_img'] = data['src_img'].to(device)
@@ -93,24 +93,24 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device):
         # 2. calculate sim
         assert args.loss_stage in ['sim', 'sim_geo', 'votes', 'votes_geo'], "Unrecognized loss stage"
         if 'sim' in args.loss_stage:
-            cross_sim = model.calculate_sim(src['feats'], trg['feats'])
+            cross_sim = model.module.calculate_sim(src['feats'], trg['feats'])
             if args.loss == 'weak':
-                src_sim = model.calculate_sim(src['feats'], src['feats'])
-                trg_sim = model.calculate_sim(trg['feats'], trg['feats'])
+                src_sim = model.module.calculate_sim(src['feats'], src['feats'])
+                trg_sim = model.module.calculate_sim(trg['feats'], trg['feats'])
 
         if 'votes' in args.loss_stage:
             src_size = (src['feats'].size()[0], src['feats'].size()[1])
             trg_size = (trg['feats'].size()[0], trg['feats'].size()[1])
-            cross_sim = model.calculate_votes(src['feats'], trg['feats'], args.epsilon, args.exp2, src_size, trg_size, src['weights'], trg['weights'])
+            cross_sim = model.module.calculate_votes(src['feats'], trg['feats'], args.epsilon, args.exp2, src_size, trg_size, src['weights'], trg['weights'])
             if args.loss == 'weak':
-                src_sim = model.calculate_votes(src['feats'], src['feats'], args.epsilon, args.exp2, src_size, src_size, src['weights'], src['weights'])
-                trg_sim = model.calculate_votes(trg['feats'], trg['feats'], args.epsilon, args.exp2, trg_size, trg_size, trg['weights'], trg['weights'])
+                src_sim = model.module.calculate_votes(src['feats'], src['feats'], args.epsilon, args.exp2, src_size, src_size, src['weights'], src['weights'])
+                trg_sim = model.module.calculate_votes(trg['feats'], trg['feats'], args.epsilon, args.exp2, trg_size, trg_size, trg['weights'], trg['weights'])
         
         if 'geo' in args.loss_stage:
-            cross_sim = model.calculate_votesGeo(cross_sim, src['imsize'], trg['imsize'], src['box'], trg['box'])
+            cross_sim = model.module.calculate_votesGeo(cross_sim, src['imsize'], trg['imsize'], src['box'], trg['box'])
             if args.loss == 'weak':
-                src_sim = model.calculate_votesGeo(src_sim, src['imsize'], src['imsize'], src['box'], src['box'])
-                trg_sim = model.calculate_votesGeo(trg_sim, trg['imsize'], trg['imsize'], trg['box'], trg['box'])
+                src_sim = model.module.calculate_votesGeo(src_sim, src['imsize'], src['imsize'], src['box'], src['box'])
+                trg_sim = model.module.calculate_votesGeo(trg_sim, trg['imsize'], trg['imsize'], trg['box'], trg['box'])
 
         # 3. calculate loss
         if args.loss == "strong_ce":
@@ -131,7 +131,7 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device):
             del prd_kps, eval_result
         elif args.loss == 'flow':
             data['flow'] = Geometry.KpsToFlow(data['src_kps'], data['trg_kps'], data['n_pts'])
-            loss = loss_func.compute_loss(cross_sim, data['flow'], model.feat_size)
+            loss = loss_func.compute_loss(cross_sim, data['flow'], model.module.feat_size)
         elif args.loss == 'weak':
             disc_loss, match_loss = loss_func.compute_loss(cross_sim, src_sim, trg_sim, src['feats'], trg['feats'], args.weak_norm)
             loss = args.weak_lambda * disc_loss + (1-args.weak_lambda) * match_loss
@@ -143,7 +143,7 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device):
         # back propagation
         loss.backward()
         if args.use_grad_clip:
-            torch.nn.utils.clip_grad.clip_grad_value_(model.parameters(), args.grad_clip)
+            torch.nn.utils.clip_grad.clip_grad_value_(model.module.parameters(), args.grad_clip)
         optimizer.step()
       
 
@@ -151,11 +151,11 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device):
         with torch.no_grad():
             prd_kps_list = {}
             eval_result_list = {}
-            sim = model.calculate_sim(src['feats'], trg['feats'])
+            sim = model.module.calculate_sim(src['feats'], trg['feats'])
             src_size = (src['feats'].size()[0], src['feats'].size()[1])
             trg_size = (trg['feats'].size()[0], trg['feats'].size()[1])
-            votes = model.calculate_votes(src['feats'], trg['feats'], args.epsilon, args.exp2, src_size, trg_size, src['weights'], trg['weights'])
-            votes_geo = model.calculate_votesGeo(votes, src['imsize'], trg['imsize'], src['box'], trg['box'])
+            votes = model.module.calculate_votes(src['feats'], trg['feats'], args.epsilon, args.exp2, src_size, trg_size, src['weights'], trg['weights'])
+            votes_geo = model.module.calculate_votesGeo(votes, src['imsize'], trg['imsize'], src['box'], trg['box'])
             for key, corr in zip(['sim', 'votes', 'votes_geo'], [sim, votes, votes_geo]):
                 prd_kps = geometry.predict_kps(
                             src['box'],
@@ -179,16 +179,16 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device):
             )
         
         # 5. print running pck, loss    
-        if (step % 1 == 0) and dist.get_rank() == 0:
+        if (step % 20 == 0) and dist.get_rank() == 0:
             average_meter.write_process(step, len(dataloader), epoch)
 
         # 6. draw weight map
-        if (step % 240 == 0) and dist.get_rank() == 0:
+        if (step % 40 == 0) and dist.get_rank() == 0:
             # 1. Draw weight map
             weight_map_path = os.path.join(Logger.logpath, "weight_map")
             os.makedirs(weight_map_path, exist_ok=True)
             weight_pth = utils.draw_weight_map(
-                model.learner.layerweight.detach().clone().view(-1),
+                model.module.learner.layerweight.detach().clone().view(-1),
                 epoch,
                 step,
                 weight_map_path,
@@ -240,7 +240,7 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device):
 def validate(epoch, model, dataloader, args, device):
     r"""Code for training SCOT"""
  
-    model.eval()
+    model.module.eval()
     dataloader.sampler.set_epoch(epoch)
 
     average_meter = AverageMeter(args.benchmark, dataloader.dataset.cls)
@@ -281,11 +281,11 @@ def validate(epoch, model, dataloader, args, device):
             data['trg_kpidx'] = utils.match_idx(data['trg_kps'], data['n_pts'], trg_center)
         prd_kps_list = {}
         eval_result_list = {}
-        sim = model.calculate_sim(src['feats'], trg['feats'])
+        sim = model.module.calculate_sim(src['feats'], trg['feats'])
         src_size = (src['feats'].size()[0], src['feats'].size()[1])
         trg_size = (trg['feats'].size()[0], trg['feats'].size()[1])
-        votes = model.calculate_votes(src['feats'], trg['feats'], args.epsilon, args.exp2, src_size, trg_size, src['weights'], trg['weights'])
-        votes_geo = model.calculate_votesGeo(votes, src['imsize'], trg['imsize'], src['box'], trg['box'])
+        votes = model.module.calculate_votes(src['feats'], trg['feats'], args.epsilon, args.exp2, src_size, trg_size, src['weights'], trg['weights'])
+        votes_geo = model.module.calculate_votesGeo(votes, src['imsize'], trg['imsize'], src['box'], trg['box'])
         for key, corr in zip(['sim', 'votes', 'votes_geo'], [sim, votes, votes_geo]):
             prd_kps = geometry.predict_kps(
                         src['box'],
@@ -299,12 +299,12 @@ def validate(epoch, model, dataloader, args, device):
             eval_result_list[key] = utils.mean(eval_result['pck'])
             del prd_kps
 
-            # all reduce to update all processes
-            eval_result_list = all_reduce_results(eval_result_list)
-            average_meter.update(
-                eval_result_list,
-                data["pair_class"],
-            )
+        # all reduce to update all processes
+        eval_result_list = all_reduce_results(eval_result_list)
+        average_meter.update(
+            eval_result_list,
+            data["pair_class"],
+        )
         
         # 3. print running pck, loss    
         if (step % 1 == 0) and dist.get_rank() == 0:
@@ -331,7 +331,7 @@ def init_distributed_mode(args):
         args.rank = int(os.environ['RANK'])
         args.world_size = int(os.environ['WORLD_SIZE'])
         args.gpu = int(os.environ['LOCAL_RANK'])
-        print(int(os.environ['LOCAL_RANK']), args.local_rank)
+        print('local_rank = ', int(os.environ['LOCAL_RANK']), ' rank =', args.rank)
     elif 'SLURM_PROCID' in os.environ:
         args.rank = int(os.environ['SLURM_PROCID'])
         args.gpu = args.rank % torch.cuda.device_count()
@@ -353,7 +353,7 @@ def make_dataloader(args, rank, world_size):
     Logger.info("loading %s dataset"%(args.benchmark))
     trn_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, args.split, args.cam, img_side=img_side, use_resize=True, use_batch=args.use_batch)
     trn_sampler = DistributedSampler(trn_ds)
-    trn_dl = DataLoader(dataset=trn_ds, batch_size=args.batch_size, shuffle=True, num_workers=num_workers, sampler=trn_sampler, pin_memory=pin_memory)
+    trn_dl = DataLoader(dataset=trn_ds, batch_size=args.batch_size, num_workers=num_workers, sampler=trn_sampler, pin_memory=pin_memory)
     
     if args.split not in ["val", "trnval"]:
         val_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, "val", args.cam, img_side=img_side, use_resize=True, use_batch=args.use_batch)
@@ -366,7 +366,6 @@ def make_dataloader(args, rank, world_size):
 
 def main(args):
     ####    1. init DDP and Logger  ####
-    init_distributed_mode(args)
     Logger.initialize(args, training=True)
 
     if args.distributed:
@@ -402,25 +401,25 @@ def main(args):
     # resume the model
     if args.resume and rank == 0:
         Logger.info('Loading snapshot from %s'%(args.resume_path))
-        model.load_state_dict(torch.load(args.resume_path))
+        model.module.load_state_dict(torch.load(args.resume_path))
 
     # load backbone 
     if args.selfsup in ['dino', 'denseCL'] and rank == 0:
         Logger.info('Loading backbone from %s'%(args.backbone_path))
         pretrained_backbone = torch.load(args.backbone_path)
-        backbone_keys = list(model.backbone.state_dict().keys())
+        backbone_keys = list(model.module.backbone.state_dict().keys())
             
         if 'state_dict' in pretrained_backbone:
-            model.load_backbone(pretrained_backbone['state_dict'])
+            model.module.load_backbone(pretrained_backbone['state_dict'])
             load_keys = list(pretrained_backbone['state_dict'].keys())
         else:
-            model.load_backbone(pretrained_backbone)
+            model.module.load_backbone(pretrained_backbone)
             load_keys = list(pretrained_backbone.keys())
         missing_keys = [i for i in backbone_keys if i not in load_keys]
         print(missing_keys)
 
     if args.distributed:
-        model = DDP(model, device_ids=[args.gpu], output_device=args.gpu)
+        model = DDP(model, device_ids=[args.gpu], output_device=args.gpu, find_unused_parameters=True)
 
     ####    4. loss function, optimizer and scheduler ####    
     Objective.initialize(target_rate=0.5, alpha=args.alpha)
@@ -435,9 +434,9 @@ def main(args):
 
     assert args.optimizer in ["sgd", "adam"], "Unrecognized model type"
     if args.optimizer == "sgd":
-        optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+        optimizer = optim.SGD(model.module.parameters(), lr=args.lr, momentum=args.momentum)
     else:
-        optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        optimizer = optim.AdamW(model.module.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     scheduler = None
     if args.use_scheduler:
@@ -529,7 +528,7 @@ def main(args):
         #     Logger.save_epoch(model, epoch, model_pck["votes_geo"])
             
         if model_pck["votes_geo"] > best_val_pck and rank == 0:
-            Logger.save_model(model, epoch, model_pck["votes_geo"], best_val_pck)
+            Logger.save_model(model.module, epoch, model_pck["votes_geo"], best_val_pck)
             best_val_pck = model_pck["votes_geo"]
 
         if args.use_wandb and rank == 0:
@@ -610,6 +609,8 @@ if __name__ == "__main__":
     parser.add_argument("--local_rank", required=True, type=int, help='local rank for DistributedDataParallel')
 
     args = parser.parse_args()
+    
+    init_distributed_mode(args)
 
 
     if args.use_wandb and args.run_id == '':
