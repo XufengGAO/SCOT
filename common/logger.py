@@ -36,6 +36,7 @@ class Logger:
         
         if dist.get_rank() == 0:
             os.makedirs(cls.logpath, exist_ok=True)
+        dist.barrier()
   
 
         logging.basicConfig(filemode=filemode,

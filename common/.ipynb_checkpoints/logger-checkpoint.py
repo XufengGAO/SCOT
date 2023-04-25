@@ -36,6 +36,7 @@ class Logger:
         
         if dist.get_rank() == 0:
             os.makedirs(cls.logpath, exist_ok=True)
+        dist.barrier()
   
 
         logging.basicConfig(filemode=filemode,
@@ -129,7 +130,7 @@ class AverageMeter:
 
         return pck
     
-    def update(self, eval_result_list, category, loss=None):
+    def update(self, eval_result_list, category=None, loss=None):
       
         self.buffer['sim'] += [eval_result_list['sim']]
         self.buffer['votes'] += [eval_result_list['votes']]

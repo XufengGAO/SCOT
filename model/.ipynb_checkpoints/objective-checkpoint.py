@@ -18,7 +18,7 @@ class Objective:
         cls.eps = 1e-30
 
     @classmethod
-    def weighted_cross_entropy(cls, correlation_matrix, easy_match, hard_match, batch):
+    def weighted_cross_entropy(cls, correlation_matrix, easy_match, hard_match, pckthres, n_pts):
         r"""Computes sum of weighted cross-entropy values between ground-truth and prediction"""
         loss_buf = correlation_matrix.new_zeros(correlation_matrix.size(0))
         # print(loss_buf.size(), loss_buf)
@@ -26,7 +26,7 @@ class Objective:
         # normalize each row of coefficient, de-mean and unit-std
         correlation_matrix = Norm.unit_gaussian_normalize(correlation_matrix)
 
-        for idx, (ct, thres, npt) in enumerate(zip(correlation_matrix, batch['pckthres'], batch['n_pts'])):
+        for idx, (ct, thres, npt) in enumerate(zip(correlation_matrix, pckthres, n_pts)):
 
             # Hard (incorrect) match
             if len(hard_match['src'][idx]) > 0:
@@ -58,7 +58,7 @@ class Objective:
         r"""Computes information entropy of all candidate matches"""
         bsz = correlation_matrix.size(0)
 
-        correlation_matrix = Correlation.mutual_nn_filter(correlation_matrix)
+        # correlation_matrix = Correlation.mutual_nn_filter(correlation_matrix)
 
         side = int(math.sqrt(correlation_matrix.size(1)))
         new_side = side // rescale_factor
@@ -81,7 +81,27 @@ class Objective:
         score_net = (src_ent + trg_ent).mean(dim=1) / 2
 
         return score_net.mean()
+    
+    @classmethod
+    def infor_entropy(cls, correlation_matrix, weak_norm='l1'):
+        r"""Computes information entropy of all candidate matches"""
+        # correlation_matrix = Correlation.mutual_nn_filter(correlation_matrix)
 
+        norm = {'l1':Norm.l1normalize, 'linear':Norm.linearnormalize}
+        src_pdf = norm[weak_norm](correlation_matrix)
+        trg_pdf = norm[weak_norm](correlation_matrix.transpose(1,2))
+
+        src_pdf[src_pdf == 0.0] = cls.eps
+        trg_pdf[trg_pdf == 0.0] = cls.eps
+
+        src_ent = (-(src_pdf * torch.log2(src_pdf)).sum(dim=2))
+        trg_ent = (-(trg_pdf * torch.log2(trg_pdf)).sum(dim=2))
+
+        score_net = ((src_ent + trg_ent).mean(dim=1) / 2).mean()
+        del src_ent, trg_ent, src_pdf, trg_pdf, correlation_matrix
+        
+        return score_net
+    
     @classmethod
     def layer_selection_loss(cls, layer_sel):
         r"""Encourages model to select each layer at a certain rate"""

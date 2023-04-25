@@ -77,7 +77,7 @@ class SCOT_CAM(nn.Module):
 
         self.select_all = select_all
 
-    def forward(self, src_img, trg_img, classmap, src_mask, trg_mask, backbone, model_stage="traing"):
+    def forward(self, src_img, trg_img, classmap, src_mask, trg_mask, backbone, model_stage="train"):
         r"""Forward pass"""
 
         # 1. Update the hyperpixel_ids by checking the weights
@@ -149,7 +149,7 @@ class SCOT_CAM(nn.Module):
             PI = torch.pow(self.relu(src_size[1]*PI), exp2)
 
             votes.append(PI.unsqueeze(0))
-        del mus, nus, src_feats, trg_feats
+        del mus, nus, src_feats, trg_feats, sim, costs
 
         votes = torch.cat(votes, dim=0)
 
@@ -230,6 +230,7 @@ class SCOT_CAM(nn.Module):
                 else:
                     mask = self.get_CAM_multi(img, feat_map, fc, sz=(img.size(2),img.size(3)), top_k=2)                 
             scale = 1.0
+            del feat_map, fc
             
             hpos = geometry.center(hpgeometry) # 4096 2
             # print("hpos", hpos.size(), hpos[:], Geometry.rf_center.size(), Geometry.rf_center[:])

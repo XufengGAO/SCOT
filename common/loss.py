@@ -57,7 +57,8 @@ class WeakLoss(LossStrategy):
         # 1. cross-entropy loss for self-correleation maps
         # print(src_sim.size(), trg_sim.size(), src_feats.size(), trg_feats.size(), cross_sim.size())
         disc_loss = Objective.infor_entropy(src_sim, weak_norm) + Objective.infor_entropy(trg_sim, weak_norm) + Objective.infor_entropy(cross_sim, weak_norm)
-
+        # disc_loss = torch.zeros(1).to(cross_sim.device)
+        
         src_feats = src_feats / (torch.norm(src_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10) # normalized features
         trg_feats = trg_feats / (torch.norm(trg_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10)
 
@@ -68,6 +69,7 @@ class WeakLoss(LossStrategy):
         #trg2src_dist = trg2src_dist / (torch.norm(trg2src_dist, p=2, dim=1, keepdim=True)+ 1e-10)
 
         match_loss = 0.5 * (src2trg_dist.norm(dim=(1,2)).mean() + trg2src_dist.norm(dim=(1,2)).mean())
+        # match_loss = torch.zeros(1).to(cross_sim.device)
 
         return disc_loss, match_loss
 

@@ -97,9 +97,10 @@ class Objective:
         src_ent = (-(src_pdf * torch.log2(src_pdf)).sum(dim=2))
         trg_ent = (-(trg_pdf * torch.log2(trg_pdf)).sum(dim=2))
 
-        score_net = (src_ent + trg_ent).mean(dim=1) / 2
+        score_net = ((src_ent + trg_ent).mean(dim=1) / 2).mean()
         del src_ent, trg_ent, src_pdf, trg_pdf, correlation_matrix
-        return score_net.mean()
+        
+        return score_net
     
     @classmethod
     def layer_selection_loss(cls, layer_sel):

@@ -172,6 +172,7 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device):
                 del prd_kps
 
             # all reduce to update all processes
+            dist.barrier()
             eval_result_list = all_reduce_results(eval_result_list)
             losses = all_reduce_results(losses)
             average_meter.update(
@@ -206,7 +207,7 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device):
         # 5. collect gradients
         if args.loss == 'weak':
             #print('disc_loss = %.2f, disc_grad = %.2f, match_loss = %.2f, match_grad = %.2f'%(disc_loss.item(), disc_loss.grad.item(), match_loss.item(), match_loss.grad.item()))
-            if args.use_wandb:
+            if args.use_wandb and dist.get_rank() == 0:
                 #wandb.log({'disc_grad':disc_loss.grad.item(), 'match_grad':match_loss.grad.item()})
                 wandb.log({'disc_loss':disc_loss.item(), 'match_loss':match_loss.item()})
             del match_loss, disc_loss
@@ -221,7 +222,7 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device):
         class_pth = utils.draw_class_pck(
             average_meter.sel_buffer["votes_geo"], draw_class_pck_path, epoch, step
         )
-        if args.use_wandb:
+        if args.use_wandb and dist.get_rank() == 0:
             wandb.log(
                 {
                     "class_pck": wandb.Image(Image.open(class_pth).convert("RGB")),
