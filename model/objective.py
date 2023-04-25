@@ -58,7 +58,7 @@ class Objective:
         r"""Computes information entropy of all candidate matches"""
         bsz = correlation_matrix.size(0)
 
-        correlation_matrix = Correlation.mutual_nn_filter(correlation_matrix)
+        # correlation_matrix = Correlation.mutual_nn_filter(correlation_matrix)
 
         side = int(math.sqrt(correlation_matrix.size(1)))
         new_side = side // rescale_factor
@@ -85,7 +85,7 @@ class Objective:
     @classmethod
     def infor_entropy(cls, correlation_matrix, weak_norm='l1'):
         r"""Computes information entropy of all candidate matches"""
-        correlation_matrix = Correlation.mutual_nn_filter(correlation_matrix)
+        # correlation_matrix = Correlation.mutual_nn_filter(correlation_matrix)
 
         norm = {'l1':Norm.l1normalize, 'linear':Norm.linearnormalize}
         src_pdf = norm[weak_norm](correlation_matrix)

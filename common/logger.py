@@ -129,7 +129,7 @@ class AverageMeter:
 
         return pck
     
-    def update(self, eval_result_list, category, loss=None):
+    def update(self, eval_result_list, category=None, loss=None):
       
         self.buffer['sim'] += [eval_result_list['sim']]
         self.buffer['votes'] += [eval_result_list['votes']]

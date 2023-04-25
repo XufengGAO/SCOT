@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from model.objective import Objective
-
+import torch.nn.functional as F
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class LossStrategy(ABC):
@@ -51,7 +51,7 @@ class WeakLoss(LossStrategy):
         r"""Returns correlation matrices of 'ALL PAIRS' in a batch"""
         return correlation_matrix.detach().clone()
 
-    def compute_loss(self, cross_sim, src_sim, trg_sim, src_feats, trg_feats, weak_norm='l1'):
+    def compute_loss(self, cross_sim, src_sim, trg_sim, src_feats, trg_feats, weak_norm='l1', temp=1.0):
         r"""Strongly-supervised matching loss (L_{match})"""
         
         # 1. cross-entropy loss for self-correleation maps
@@ -62,9 +62,8 @@ class WeakLoss(LossStrategy):
         trg_feats = trg_feats / (torch.norm(trg_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10)
 
         # 2. matching loss for features
-        softmax = nn.Softmax(dim=1)
-        src2trg_dist = torch.bmm(src_feats.transpose(1,2), softmax(cross_sim)) - trg_feats.transpose(1,2)
-        trg2src_dist = torch.bmm(trg_feats.transpose(1,2), softmax(cross_sim.transpose(1,2))) - trg_feats.transpose(1,2)
+        src2trg_dist = torch.bmm(src_feats.transpose(1,2), F.softmax(cross_sim/temp, dim=1)) - trg_feats.transpose(1,2)
+        trg2src_dist = torch.bmm(trg_feats.transpose(1,2), F.softmax((cross_sim.transpose(1,2))/temp, dim=1)) - trg_feats.transpose(1,2)
         #src2trg_dist = src2trg_dist / (torch.norm(src2trg_dist, p=2, dim=1, keepdim=True)+ 1e-10)
         #trg2src_dist = trg2src_dist / (torch.norm(trg2src_dist, p=2, dim=1, keepdim=True)+ 1e-10)
 

@@ -113,6 +113,8 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device):
                 trg_sim = model.module.calculate_votesGeo(trg_sim, trg['imsize'], trg['imsize'], trg['box'], trg['box'])
 
         # 3. calculate loss
+        src_center = 0
+        trg_center = 0
         if args.loss == "strong_ce":
             src_center = geometry.center(src['box'])
             trg_center = geometry.center(trg['box'])
@@ -133,7 +135,7 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device):
             data['flow'] = Geometry.KpsToFlow(data['src_kps'], data['trg_kps'], data['n_pts'])
             loss = loss_func.compute_loss(cross_sim, data['flow'], model.module.feat_size)
         elif args.loss == 'weak':
-            disc_loss, match_loss = loss_func.compute_loss(cross_sim, src_sim, trg_sim, src['feats'], trg['feats'], args.weak_norm)
+            disc_loss, match_loss = loss_func.compute_loss(cross_sim, src_sim, trg_sim, src['feats'], trg['feats'], args.weak_norm, args.temp)
             loss = args.weak_lambda * disc_loss + (1-args.weak_lambda) * match_loss
             losses['disc_loss'] = loss.item()
             losses['match_loss'] = match_loss.item()
@@ -202,12 +204,12 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device):
                 )
 
         # 5. collect gradients
-        # if args.loss == 'weak':
-        #     #print('disc_loss = %.2f, disc_grad = %.2f, match_loss = %.2f, match_grad = %.2f'%(disc_loss.item(), disc_loss.grad.item(), match_loss.item(), match_loss.grad.item()))
-        #     if args.use_wandb:
-        #         #wandb.log({'disc_grad':disc_loss.grad.item(), 'match_grad':match_loss.grad.item()})
-        #         wandb.log({'disc_loss':disc_loss.item(), 'match_loss':match_loss.item()})
-        #     del match_loss, disc_loss
+        if args.loss == 'weak':
+            #print('disc_loss = %.2f, disc_grad = %.2f, match_loss = %.2f, match_grad = %.2f'%(disc_loss.item(), disc_loss.grad.item(), match_loss.item(), match_loss.grad.item()))
+            if args.use_wandb:
+                #wandb.log({'disc_grad':disc_loss.grad.item(), 'match_grad':match_loss.grad.item()})
+                wandb.log({'disc_loss':disc_loss.item(), 'match_loss':match_loss.item()})
+            del match_loss, disc_loss
                 
         del src, trg, src_center, trg_center
         del loss, eval_result_list, prd_kps_list            
@@ -602,6 +604,7 @@ if __name__ == "__main__":
     parser.add_argument('--wandb_proj', type=str, default='', help='wandb project name')
     parser.add_argument("--weak_norm", type=str, default="l1", choices=["l1", "linear", "softmax"])
     parser.add_argument('--weak_lambda', type=float, default=0.5, help='lambda for weak loss (default: 0.5)')
+    parser.add_argument('--temp', type=float, default=0.05, help='lambda for weak loss (default: 0.5)')
 
     # Arguments for distributed data parallel
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
