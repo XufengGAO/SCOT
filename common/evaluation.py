@@ -11,16 +11,10 @@ class Evaluator:
     @classmethod
     def initialize(cls, alpha=0.1):
 
-        cls.eval_func = cls.eval_kps_transfer
         cls.alpha = alpha
 
     @classmethod
-    def evaluate(cls, prd_kps, batch, supervision):
-        r"""Compute evaluation metric"""
-        return cls.eval_func(prd_kps, batch, supervision)
-
-    @classmethod
-    def eval_kps_transfer(cls, prd_kps, batch, supervision):
+    def eval_kps_transfer(cls, prd_kps, batch, supervision, pck_only=False):
         r"""Compute percentage of correct key-points (PCK) based on prediction"""
 
         easy_match = {'src': [], 'trg': [], 'dist': []}
@@ -36,7 +30,7 @@ class Evaluator:
             # pck_ids.append({'correct_ids':correct_ids, 'incorrect_ids':incorrect_ids})
             pck_ids[idx, correct_ids] = 1
             # Collect easy and hard match feature index & store pck to buffer
-            if supervision == "strong_ce":
+            if supervision == "strong_ce" and not pck_only:
                 easy_match['dist'].append(correct_dist)
                 # for each keypoint, we find its nearest neighbour of center of receptive field
                 # then kpidx is the id of hyperpixel

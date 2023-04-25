@@ -47,10 +47,13 @@ def all_reduce_results(results):
     # Reconstruct the dictionary
     return OrderedDict((k, v.item()) for k, v in zip(names, values))
 
-def train(epoch, model, dataloader, loss_func, optimizer, args, device):
+def train(epoch, model, dataloader, loss_func, optimizer, args, device, model_stage = 'train'):
     r"""Code for training SCOT"""
- 
-    model.module.train()
+    if model_stage == 'train':
+        model.module.train()
+    else:
+        model.module.eval()
+
     dataloader.sampler.set_epoch(epoch)
 
     average_meter = AverageMeter(args.benchmark, dataloader.dataset.cls)
@@ -86,12 +89,13 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device):
             data["src_mask"],
             data["trg_mask"],
             args.backbone,
-            'train',
+            model_stage,
         )
 
         # {'box', 'feats', 'imsize', 'weights'}
         # 2. calculate sim
         assert args.loss_stage in ['sim', 'sim_geo', 'votes', 'votes_geo'], "Unrecognized loss stage"
+        cross_sim, src_sim, trg_sim = 0, 0, 0
         if 'sim' in args.loss_stage:
             cross_sim = model.module.calculate_sim(src['feats'], trg['feats'])
             if args.loss == 'weak':
@@ -116,21 +120,23 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device):
         src_center = 0
         trg_center = 0
         if args.loss == "strong_ce":
-            src_center = geometry.center(src['box'])
-            trg_center = geometry.center(trg['box'])
-            data['src_kpidx'] = utils.match_idx(data['src_kps'], data['n_pts'], src_center)    
-            data['trg_kpidx'] = utils.match_idx(data['trg_kps'], data['n_pts'], trg_center)
-            # prediction and evaluation for current loss stage
-            prd_kps = geometry.predict_kps(
-                                src['box'],
-                                trg['box'],
-                                data["src_kps"],
-                                data["n_pts"],
-                                cross_sim.detach().clone(),
-                                ) # predicted points
-            eval_result = Evaluator.evaluate(prd_kps, data, args.loss) # return dict results
+            with torch.no_grad():
+                src_center = geometry.center(src['box'])
+                trg_center = geometry.center(trg['box'])
+                data['src_kpidx'] = utils.match_idx(data['src_kps'], data['n_pts'], src_center)    
+                data['trg_kpidx'] = utils.match_idx(data['trg_kps'], data['n_pts'], trg_center)
+                # prediction and evaluation for current loss stage
+                prd_kps = geometry.predict_kps(
+                                    src['box'],
+                                    trg['box'],
+                                    data["src_kps"],
+                                    data["n_pts"],
+                                    cross_sim.detach().clone(),
+                                    ) # predicted points
+                eval_result = Evaluator.eval_kps_transfer(prd_kps, data, args.loss) # return dict results
             loss = loss_func.compute_loss(cross_sim, eval_result, data['pckthres'], data['n_pts'])
-            del prd_kps, eval_result
+
+            del prd_kps, eval_result, src_center, trg_center
         elif args.loss == 'flow':
             data['flow'] = Geometry.KpsToFlow(data['src_kps'], data['trg_kps'], data['n_pts'])
             loss = loss_func.compute_loss(cross_sim, data['flow'], model.module.feat_size)
@@ -143,41 +149,38 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device):
         losses['total_loss'] = loss.item()
 
         # back propagation
-        loss.backward()
-        if args.use_grad_clip:
-            torch.nn.utils.clip_grad.clip_grad_value_(model.module.parameters(), args.grad_clip)
-        optimizer.step()
+        if model_stage == 'train':
+            loss.backward()
+            if args.use_grad_clip:
+                torch.nn.utils.clip_grad.clip_grad_value_(model.module.parameters(), args.grad_clip)
+            optimizer.step()
+        del loss, cross_sim
       
-
         # 4. collect results
         with torch.no_grad():
-            prd_kps_list = {}
-            eval_result_list = {}
-            sim = model.module.calculate_sim(src['feats'], trg['feats'])
+            batch_pck = 0
             src_size = (src['feats'].size()[0], src['feats'].size()[1])
             trg_size = (trg['feats'].size()[0], trg['feats'].size()[1])
             votes = model.module.calculate_votes(src['feats'], trg['feats'], args.epsilon, args.exp2, src_size, trg_size, src['weights'], trg['weights'])
-            votes_geo = model.module.calculate_votesGeo(sim, src['imsize'], trg['imsize'], src['box'], trg['box'])
-            for key, corr in zip(['sim', 'votes', 'votes_geo'], [sim, votes, votes_geo]):
-                prd_kps = geometry.predict_kps(
-                            src['box'],
-                            trg['box'],
-                            data["src_kps"],
-                            data["n_pts"],
-                            corr,
-                            ) # predicted points
-                eval_result = Evaluator.evaluate(prd_kps, data, args.loss) # return dict results
-                # prd_kps_list[key] = prd_kps
-                eval_result_list[key] = utils.mean(eval_result['pck'])
-                del prd_kps
+            votes_geo = model.module.calculate_votesGeo(votes, src['imsize'], trg['imsize'], src['box'], trg['box'])
+            prd_kps = geometry.predict_kps(
+                        src['box'],
+                        trg['box'],
+                        data["src_kps"],
+                        data["n_pts"],
+                        votes_geo,
+                        ) # predicted points
+            eval_result = Evaluator.eval_kps_transfer(prd_kps, data, args.loss, pck_only=True) # return dict results
+            # prd_kps_list[key] = prd_kps
+            batch_pck = utils.mean(eval_result['pck'])
+            del votes, votes_geo, eval_result
 
             # all reduce to update all processes
-            dist.barrier()
-            eval_result_list = all_reduce_results(eval_result_list)
             losses = all_reduce_results(losses)
+            dist.all_reduce(batch_pck, dist.ReduceOp.SUM)
+            batch_pck /= dist.get_world_size()
             average_meter.update(
-                eval_result_list,
-                data["pair_class"],
+                batch_pck,
                 losses['total_loss'],
             )
         
@@ -213,7 +216,7 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device):
             del match_loss, disc_loss
                 
         del src, trg, src_center, trg_center
-        del loss, eval_result_list, prd_kps_list            
+             
     
     # Draw class pck
     if False and (epoch % 2)==0:
@@ -231,102 +234,13 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device):
 
     # 3. log epoch loss, epoch pck
     if dist.get_rank() == 0:
-        average_meter.write_result("Training", epoch)
+        average_meter.write_result(model_stage, epoch)
 
     avg_loss = utils.mean(average_meter.loss_buffer)
-    avg_pck = {'sim':0, 'votes':0, 'votes_geo':0}
-    for key in ['sim', 'votes', 'votes_geo']:
-        avg_pck[key] = utils.mean(average_meter.buffer[key])
+    avg_pck = utils.mean(average_meter.pck_buffer)
 
     return avg_loss, avg_pck
 
-def validate(epoch, model, dataloader, args, device):
-    r"""Code for training SCOT"""
- 
-    model.module.eval()
-    dataloader.sampler.set_epoch(epoch)
-
-    average_meter = AverageMeter(args.benchmark, dataloader.dataset.cls)
-
-    # Training
-    for step, data in enumerate(dataloader):
-        data['src_img'] = data['src_img'].to(device)
-        data['trg_img'] = data['trg_img'].to(device)
-        data['src_kps'] = data['src_kps'].to(device)
-        data['n_pts'] = data['n_pts'].to(device)
-        data['trg_kps'] = data['trg_kps'].to(device)
-        data['pckthres'] = data['pckthres'].to(device)
-
-        if "src_mask" in data.keys():
-            data["src_mask"] = data["src_mask"].to(device)
-            data["trg_mask"] = data["trg_mask"].to(device)
-        else:
-            data["src_mask"] = None
-            data["trg_mask"] = None
-
-        # 1. forward pass
-        src, trg = model(
-            data['src_img'],
-            data['trg_img'],
-            args.classmap,
-            data["src_mask"],
-            data["trg_mask"],
-            args.backbone,
-            'validate',
-        )
-
-        # {'box', 'feats', 'imsize', 'weights'}
-        # 2. collect results
-        if args.loss == "strong_ce":
-            src_center = geometry.center(src['box'])
-            trg_center = geometry.center(trg['box'])
-            data['src_kpidx'] = utils.match_idx(data['src_kps'], data['n_pts'], src_center)    
-            data['trg_kpidx'] = utils.match_idx(data['trg_kps'], data['n_pts'], trg_center)
-        prd_kps_list = {}
-        eval_result_list = {}
-        sim = model.module.calculate_sim(src['feats'], trg['feats'])
-        src_size = (src['feats'].size()[0], src['feats'].size()[1])
-        trg_size = (trg['feats'].size()[0], trg['feats'].size()[1])
-        votes = model.module.calculate_votes(src['feats'], trg['feats'], args.epsilon, args.exp2, src_size, trg_size, src['weights'], trg['weights'])
-        votes_geo = model.module.calculate_votesGeo(votes, src['imsize'], trg['imsize'], src['box'], trg['box'])
-        for key, corr in zip(['sim', 'votes', 'votes_geo'], [sim, votes, votes_geo]):
-            prd_kps = geometry.predict_kps(
-                        src['box'],
-                        trg['box'],
-                        data["src_kps"],
-                        data["n_pts"],
-                        corr,
-                        ) # predicted points
-            eval_result = Evaluator.evaluate(prd_kps, data, args.loss) # return dict results
-            # prd_kps_list[key] = prd_kps
-            eval_result_list[key] = utils.mean(eval_result['pck'])
-            del prd_kps
-
-        # all reduce to update all processes
-        eval_result_list = all_reduce_results(eval_result_list)
-        average_meter.update(
-            eval_result_list,
-            data["pair_class"],
-        )
-        
-        # 3. print running pck, loss    
-        if (step % 1 == 0) and dist.get_rank() == 0:
-            average_meter.write_process(step, len(dataloader), epoch)
-
-                
-        del src, trg
-        del eval_result_list, prd_kps_list            
-    
-    # log epoch loss, epoch pck
-    if dist.get_rank() == 0:
-        average_meter.write_result("Validation", epoch)
-
-    avg_loss = utils.mean(average_meter.loss_buffer)
-    avg_pck = {'sim':0, 'votes':0, 'votes_geo':0}
-    for key in ['sim', 'votes', 'votes_geo']:
-        avg_pck[key] = utils.mean(average_meter.buffer[key])
-
-    return avg_loss, avg_pck
 
 def init_distributed_mode(args):
     """ init for distribute mode """
@@ -459,30 +373,20 @@ def main(args):
             wandb_name += "_%s"%(args.scheduler)
         if args.optimizer == "sgd":
             wandb_name = wandb_name + "_m%.2f"%(args.momentum)
-        wandb_name = wandb_name + "_bsz%d"%(args.batch_size)
-        
-        if args.use_scot2:
-            wandb_name = wandb_name + "_scot2"
-        wandb_name = wandb_name + "_%s_%s_%s_alp%.2f"%(args.selfsup, args.backbone, args.split, args.alpha)
+        wandb_name = wandb_name + "_bsz%d"%(args.batch_size) + "_%s_%s_%s_alp%.2f"%(args.selfsup, args.backbone, args.split, args.alpha)
 
         run = wandb.init(project=args.wandb_proj, config=args, id=args.run_id, resume="allow", name=wandb_name)
 
         wandb.define_metric("iters")
-        wandb.define_metric("running_trn_avg_loss", step_metric="iters")
-        wandb.define_metric("running_avg_pck_sim", step_metric="iters")
-        wandb.define_metric("running_avg_pck_votes", step_metric="iters")
-        wandb.define_metric("running_avg_pck_votes_geo", step_metric="iters")
+        wandb.define_metric("running_avg_loss", step_metric="iters")
+        wandb.define_metric("running_avg_pck", step_metric="iters")
         
         wandb.define_metric("epochs")
         wandb.define_metric("trn_loss", step_metric="epochs")
-        wandb.define_metric("trn_pck_sim", step_metric="epochs")
-        wandb.define_metric("trn_pck_votes", step_metric="epochs")
-        wandb.define_metric("trn_pck_votes_geo", step_metric="epochs")
+        wandb.define_metric("trn_pck", step_metric="epochs")
         
         wandb.define_metric("val_loss", step_metric="epochs")
-        wandb.define_metric("val_pck_sim", step_metric="epochs")
-        wandb.define_metric("val_pck_votes", step_metric="epochs")
-        wandb.define_metric("val_pck_votes_geo", step_metric="epochs")
+        wandb.define_metric("val_pck", step_metric="epochs")
 
         if args.loss == 'weak':
             wandb.define_metric("disc_grad", step_metric="iters")
@@ -500,20 +404,16 @@ def main(args):
     for epoch in range(args.start_epoch, args.epochs):
 
         # training
-        trn_loss, trn_pck = train(epoch, model, trn_dl, loss_func, optimizer, args, device)
+        trn_loss, trn_pck = train(epoch, model, trn_dl, loss_func, optimizer, args, device, 'train')
         log_benchmark["trn_loss"] = trn_loss
-        log_benchmark["trn_pck_sim"] = trn_pck['sim']
-        log_benchmark["trn_pck_votes"] = trn_pck['votes']
-        log_benchmark["trn_pck_votes_geo"] = trn_pck['votes_geo']
+        log_benchmark["trn_pck"] = trn_pck
         
         # validation
         if args.split not in ["val", "trnval"]:
             with torch.no_grad():
-                val_loss, val_pck = validate(epoch, model, val_dl, args, device)
+                val_loss, val_pck = train(epoch, model, val_dl, loss_func, optimizer, args, device, 'eval')
                 log_benchmark["val_loss"] = val_loss
-                log_benchmark["val_pck_sim"] = val_pck['sim']
-                log_benchmark["val_pck_votes"] = val_pck['votes']
-                log_benchmark["val_pck_votes_geo"] = val_pck['votes_geo']
+                log_benchmark["val_pck"] = val_pck
                 
         if args.use_scheduler:
                 # lrs.append(utils.get_lr(optimizer))
@@ -530,9 +430,9 @@ def main(args):
         # if (epoch%save_e)==0:
         #     Logger.save_epoch(model, epoch, model_pck["votes_geo"])
             
-        if model_pck["votes_geo"] > best_val_pck and rank == 0:
-            Logger.save_model(model.module, epoch, model_pck["votes_geo"], best_val_pck)
-            best_val_pck = model_pck["votes_geo"]
+        if model_pck > best_val_pck and rank == 0:
+            Logger.save_model(model.module, epoch, model_pck, best_val_pck)
+            best_val_pck = model_pck
 
         if args.use_wandb and rank == 0:
             wandb.log({'epochs':epoch})

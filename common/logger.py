@@ -90,18 +90,16 @@ class AverageMeter:
         self.eval_buf = self.eval_buf[benchmark]
         
         # buffer for average pck
-        self.buffer = {'sim':[], 'votes':[], 'votes_geo':[]}
-        
-        if cls is not None:
-            # buffer for class-pck
-            self.cls_buffer = {'sim':{}, 'votes':{}, 'votes_geo':{}}
-            for sub_cls in cls:                
-                self.cls_buffer['sim'][sub_cls] = []
-                self.cls_buffer['votes'][sub_cls] = []
-                self.cls_buffer['votes_geo'][sub_cls] = []
+        self.pck_buffer = []
 
-            # buffer for loss
-            self.loss_buffer = []
+        # buffer for class-pck
+        self.cls_buffer = {}
+        if cls is not None:
+            for sub_cls in cls:                
+                self.cls_buffer[sub_cls] = []
+
+        # buffer for loss
+        self.loss_buffer = []
                 
     def eval_pck(self, prd_kps, data, alpha=0.1):
         r"""Compute percentage of correct key-points (PCK) based on prediction"""
@@ -130,11 +128,9 @@ class AverageMeter:
 
         return pck
     
-    def update(self, eval_result_list, category=None, loss=None):
+    def update(self, batch_pck, loss=None):
       
-        self.buffer['sim'] += [eval_result_list['sim']]
-        self.buffer['votes'] += [eval_result_list['votes']]
-        self.buffer['votes_geo'] += [eval_result_list['votes_geo']]
+        self.pck_buffer.append(batch_pck)
 
         # eval_name = ['sim', 'votes', 'votes_geo']
         # for key in self.cls_buffer: # per-class pck term
@@ -154,10 +150,7 @@ class AverageMeter:
         if len(self.loss_buffer) > 0:
             msg += 'Loss: %5.4f  ' % (sum(self.loss_buffer) / len(self.loss_buffer))
 
-        msg += 'PCK in buf: sim=%4.4f, votes=%4.4f, votes_geo=%4.4f' % ( 
-                                                                        sum(self.buffer['sim']) / len(self.buffer['sim']),
-                                                                        sum(self.buffer['votes']) / len(self.buffer['votes']),
-                                                                        sum(self.buffer['votes_geo']) / len(self.buffer['votes_geo']),)
+        msg += 'PCK in buf: %5.4f' % (sum(self.pck_buffer) / len(self.pck_buffer))
 
         msg += '***\n'
         Logger.info(msg)
@@ -170,10 +163,7 @@ class AverageMeter:
             msg += 'Avg Loss: %6.5f  ' % (sum(self.loss_buffer) / len(self.loss_buffer))
 
 
-        msg += 'Avg PCK: sim=%4.4f, votes=%4.4f, votes_geo=%4.4f' % ( 
-                                                                    sum(self.buffer['sim']) / len(self.buffer['sim']),
-                                                                    sum(self.buffer['votes']) / len(self.buffer['votes']),
-                                                                    sum(self.buffer['votes_geo']) / len(self.buffer['votes_geo']),)
+        msg += 'Avg PCK: %4.4f' % (sum(self.pck_buffer) / len(self.pck_buffer))
 
         Logger.info(msg)
 
