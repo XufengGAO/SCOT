@@ -157,7 +157,7 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device):
             src_size = (src['feats'].size()[0], src['feats'].size()[1])
             trg_size = (trg['feats'].size()[0], trg['feats'].size()[1])
             votes = model.module.calculate_votes(src['feats'], trg['feats'], args.epsilon, args.exp2, src_size, trg_size, src['weights'], trg['weights'])
-            votes_geo = model.module.calculate_votesGeo(votes, src['imsize'], trg['imsize'], src['box'], trg['box'])
+            votes_geo = model.module.calculate_votesGeo(sim, src['imsize'], trg['imsize'], src['box'], trg['box'])
             for key, corr in zip(['sim', 'votes', 'votes_geo'], [sim, votes, votes_geo]):
                 prd_kps = geometry.predict_kps(
                             src['box'],
