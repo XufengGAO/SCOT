@@ -85,14 +85,14 @@ class Objective:
     @classmethod
     def infor_entropy(cls, correlation_matrix, weak_norm='l1'):
         r"""Computes information entropy of all candidate matches"""
-        # correlation_matrix = Correlation.mutual_nn_filter(correlation_matrix)
+        #correlation_matrix = Correlation.mutual_nn_filter(correlation_matrix)
 
         norm = {'l1':Norm.l1normalize, 'linear':Norm.linearnormalize}
         src_pdf = norm[weak_norm](correlation_matrix)
         trg_pdf = norm[weak_norm](correlation_matrix.transpose(1,2))
 
-        src_pdf[src_pdf == 0.0] = cls.eps
-        trg_pdf[trg_pdf == 0.0] = cls.eps
+        src_pdf[src_pdf <= cls.eps] = cls.eps
+        trg_pdf[trg_pdf <= cls.eps] = cls.eps
 
         src_ent = (-(src_pdf * torch.log2(src_pdf)).sum(dim=2))
         trg_ent = (-(trg_pdf * torch.log2(trg_pdf)).sum(dim=2))

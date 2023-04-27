@@ -10,7 +10,9 @@ def center(box):
     x_center = box[:, 0] + torch.div((box[:, 2] - box[:, 0]), 2, rounding_mode='trunc')
     y_center = box[:, 1] + torch.div((box[:, 3] - box[:, 1]), 2, rounding_mode='trunc')
     # print("x_center", x_center.size())
-    return torch.stack((x_center, y_center)).t().to(box.device)
+    center = torch.stack((x_center, y_center)).t().to(box.device)
+    del x_center, y_center
+    return center
 
 
 def receptive_fields(rfsz, jsz, feat_size):
@@ -31,6 +33,7 @@ def receptive_fields(rfsz, jsz, feat_size):
     box[:, 2] = feat_ids[:, 1] * jsz + torch.div(rfsz, 2, rounding_mode='trunc')
     box[:, 3] = feat_ids[:, 0] * jsz + torch.div(rfsz, 2, rounding_mode='trunc')
 
+    del feat_ids
     return box
 
 def prune_margin(receptive_box, imsize, threshold=0):
@@ -83,7 +86,7 @@ def predict_kps(src_box, trg_box, src_kps, n_pts, confidence_ts):
     r"""Transfer keypoints by nearest-neighbour assignment"""
 
     # TODO: """Mutual nearest neighbor filtering (Rocco et al. NeurIPS'18)"""
-    confidence_ts = mutual_nn_filter(confidence_ts) # refined correleation matrix
+    # confidence_ts = mutual_nn_filter(confidence_ts) # refined correleation matrix
 
     prd_kps = []
     max_pts = 40
@@ -117,8 +120,11 @@ def predict_kps(src_box, trg_box, src_kps, n_pts, confidence_ts):
         pads = (-100*torch.ones((2, max_pts - np))).to(prd.device)
         prd = torch.cat([prd, pads], dim=1)
         prd_kps.append(prd)
+        del src_geomet, trg_geomet, src_nbr_onehot, n_neighbours, src_displacements, vector_summator, src_idx, trg_idx, pads, prd
 
-    return torch.stack(prd_kps)
+    prd_kpss = torch.stack(prd_kps)
+    del prd_kps, src_box, trg_box, confidence_ts
+    return prd_kpss
 
 
 def neighbours(box, kps):
@@ -135,6 +141,8 @@ def neighbours(box, kps):
 
     nbr_onehot = torch.mul(torch.mul(xmin, ymin), torch.mul(xmax, ymax)).t()
     n_neighbours = nbr_onehot.sum(dim=1)
+
+    del box_duplicate, kps_duplicate, xmin, ymin, xmax, ymax
 
     return nbr_onehot, n_neighbours
 

@@ -99,7 +99,7 @@ class AverageMeter:
                 self.cls_buffer[sub_cls] = []
 
         # buffer for loss
-        self.loss_buffer = []
+        self.loss_buffer = {}
                 
     def eval_pck(self, prd_kps, data, alpha=0.1):
         r"""Compute percentage of correct key-points (PCK) based on prediction"""
@@ -141,16 +141,20 @@ class AverageMeter:
         #             self.cls_buffer[eval_name[idx]][cls] += [eval_cls]
         
         if loss is not None: # mean loss term
-            self.loss_buffer.append(loss)
+            for key, value in loss.items():
+                if self.loss_buffer.get(key) is None:
+                    self.loss_buffer[key] = []
+                self.loss_buffer[key].append(value)
 
     def write_result(self, split, epoch=-1):
         msg = '*** %s ' % split
         msg += '[@Epoch %02d] ' % epoch if epoch > -1 else ''
 
         if len(self.loss_buffer) > 0:
-            msg += 'Loss: %5.4f  ' % (sum(self.loss_buffer) / len(self.loss_buffer))
+            for key, value in self.loss_buffer.items():
+                msg += '%s: %4.2f  ' % (key, mean(value))
 
-        msg += 'PCK in buf: %5.4f' % (sum(self.pck_buffer) / len(self.pck_buffer))
+        msg += 'PCK in buf: %4.2f' % (sum(self.pck_buffer) / len(self.pck_buffer))
 
         msg += '***\n'
         Logger.info(msg)
@@ -159,14 +163,17 @@ class AverageMeter:
         msg = '[Epoch: %02d] ' % epoch if epoch > -1 else ''
         msg += '[Batch: %04d/%04d] ' % (batch_idx+1, datalen)
         if len(self.loss_buffer) > 0:
-            msg += 'Loss (last sample): %6.4f  ' % self.loss_buffer[-1]
-            msg += 'Avg Loss: %6.5f  ' % (sum(self.loss_buffer) / len(self.loss_buffer))
-
+            # msg += 'Last sample: '
+            # for key, value in self.loss_buffer.items():
+            #     msg += '%s: %4.2f  ' % (key, value[-1])
+            msg += 'Avg: '
+            for key, value in self.loss_buffer.items():
+                msg += '%s: %4.2f  ' % (key, mean(value))
 
         msg += 'Avg PCK: %4.4f' % (sum(self.pck_buffer) / len(self.pck_buffer))
 
         Logger.info(msg)
-
+         
 def correct_kps(trg_kps, prd_kps, pckthres, alpha=0.1):
     r"""Compute the number of correctly transferred key-points"""
     # print(trg_kps.is_cuda, prd_kps.is_cuda, pckthres.is_cuda)
@@ -175,3 +182,8 @@ def correct_kps(trg_kps, prd_kps, pckthres, alpha=0.1):
     correct_pts = torch.le(l2dist, thres * alpha)
 
     return torch.sum(correct_pts)
+
+
+def mean(x):
+    r"""Computes average of a list"""
+    return sum(x) / len(x) if len(x) > 0 else 0.0

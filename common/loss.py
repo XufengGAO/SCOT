@@ -60,18 +60,19 @@ class WeakLoss(LossStrategy):
         discCross_loss = Objective.infor_entropy(cross_sim, weak_norm)
         # disc_loss = torch.zeros(1).to(cross_sim.device)
         
-        src_feats = src_feats / (torch.norm(src_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10) # normalized features
-        trg_feats = trg_feats / (torch.norm(trg_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10)
+#         src_feats = src_feats / (torch.norm(src_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10) # normalized features
+#         trg_feats = trg_feats / (torch.norm(trg_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10)
 
-        # 2. matching loss for features
-        src2trg_dist = torch.bmm(src_feats.transpose(1,2), F.softmax(cross_sim/temp, dim=1)) - trg_feats.transpose(1,2)
-        trg2src_dist = torch.bmm(trg_feats.transpose(1,2), F.softmax((cross_sim.transpose(1,2))/temp, dim=1)) - src_feats.transpose(1,2)
-        #src2trg_dist = src2trg_dist / (torch.norm(src2trg_dist, p=2, dim=1, keepdim=True)+ 1e-10)
-        #trg2src_dist = trg2src_dist / (torch.norm(trg2src_dist, p=2, dim=1, keepdim=True)+ 1e-10)
+#         # 2. matching loss for features
+#         src2trg_dist = torch.bmm(src_feats.transpose(1,2), F.softmax(cross_sim/temp, dim=1)) - trg_feats.transpose(1,2)
+#         trg2src_dist = torch.bmm(trg_feats.transpose(1,2), F.softmax((cross_sim.transpose(1,2))/temp, dim=1)) - src_feats.transpose(1,2)
+#         #src2trg_dist = src2trg_dist / (torch.norm(src2trg_dist, p=2, dim=1, keepdim=True)+ 1e-10)
+#         #trg2src_dist = trg2src_dist / (torch.norm(trg2src_dist, p=2, dim=1, keepdim=True)+ 1e-10)
 
-        match_loss = 0.5 * (src2trg_dist.norm(dim=(1,2)).mean() + trg2src_dist.norm(dim=(1,2)).mean())
-        # match_loss = torch.zeros(1).to(cross_sim.device)
-
+#         match_loss = 0.5 * (src2trg_dist.norm(dim=(1)).mean() + trg2src_dist.norm(dim=(1)).mean())
+#         del src2trg_dist, trg2src_dist
+        match_loss = torch.zeros(1).to(cross_sim.device)
+        
         return discSelf_loss, discCross_loss, match_loss
 
 class StrongFlowLoss(LossStrategy):

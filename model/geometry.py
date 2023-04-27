@@ -123,7 +123,7 @@ def predict_kps(src_box, trg_box, src_kps, n_pts, confidence_ts):
         del src_geomet, trg_geomet, src_nbr_onehot, n_neighbours, src_displacements, vector_summator, src_idx, trg_idx, pads, prd
 
     prd_kpss = torch.stack(prd_kps)
-    del prd_kps
+    del prd_kps, src_box, trg_box, confidence_ts
     return prd_kpss
 
 

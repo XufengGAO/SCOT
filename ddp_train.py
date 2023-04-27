@@ -53,9 +53,9 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device, model_st
         model.module.train()
     else:
         model.module.eval()
-
+        # dataloader.sampler.set_epoch(epoch)
     dataloader.sampler.set_epoch(epoch)
-
+    
     average_meter = AverageMeter(args.benchmark, dataloader.dataset.cls)
     total_steps = len(dataloader)
 
@@ -141,13 +141,13 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device, model_st
             data['flow'] = Geometry.KpsToFlow(data['src_kps'], data['trg_kps'], data['n_pts'])
             loss = loss_func.compute_loss(cross_sim, data['flow'], model.module.feat_size)
         elif args.loss == 'weak':
-            disc_loss, match_loss = loss_func.compute_loss(cross_sim, src_sim, trg_sim, src['feats'], trg['feats'], args.weak_norm, args.temp)
-            loss = args.weak_lambda * disc_loss + (1-args.weak_lambda) * match_loss
-            losses['disc_loss'] = loss.item()
+            discSelf_loss, discCross_loss, match_loss = loss_func.compute_loss(cross_sim, src_sim, trg_sim, src['feats'], trg['feats'], args.weak_norm, args.temp)
+            loss = 0.5 * discSelf_loss + 1.0 * discCross_loss + 10 * match_loss
+            losses['discSelf_loss'] = discSelf_loss.item()
+            losses['discCross_loss'] = discCross_loss.item()
             losses['match_loss'] = match_loss.item()
 
-        losses['total_loss'] = loss.item()
-
+        losses['Loss'] = loss.item()
         # back propagation
         if model_stage == 'train':
             loss.backward()
@@ -172,17 +172,22 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device, model_st
                         ) # predicted points
             eval_result = Evaluator.eval_kps_transfer(prd_kps, data, args.loss, pck_only=True) # return dict results
             # prd_kps_list[key] = prd_kps
-            batch_pck = utils.mean(eval_result['pck'])
+            batch_pck = torch.tensor(utils.mean(eval_result['pck'])).cuda()
             del votes, votes_geo, eval_result
-
+            
+            dist.barrier()
             # all reduce to update all processes
-            losses = all_reduce_results(losses)
-            dist.all_reduce(batch_pck, dist.ReduceOp.SUM)
-            batch_pck /= dist.get_world_size()
+            if model_stage == 'train' or True:
+                losses = all_reduce_results(losses)
+                dist.all_reduce(batch_pck, dist.ReduceOp.SUM)
+                batch_pck /= dist.get_world_size()
+            if model_stage != 'train':
+                print('after reduce %d '%(step), losses)
             average_meter.update(
                 batch_pck,
-                losses['total_loss'],
+                losses,
             )
+            del batch_pck
         
         # 5. print running pck, loss    
         if (step % 20 == 0) and dist.get_rank() == 0:
@@ -212,31 +217,31 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device, model_st
             #print('disc_loss = %.2f, disc_grad = %.2f, match_loss = %.2f, match_grad = %.2f'%(disc_loss.item(), disc_loss.grad.item(), match_loss.item(), match_loss.grad.item()))
             if args.use_wandb and dist.get_rank() == 0:
                 #wandb.log({'disc_grad':disc_loss.grad.item(), 'match_grad':match_loss.grad.item()})
-                wandb.log({'disc_loss':disc_loss.item(), 'match_loss':match_loss.item()})
-            del match_loss, disc_loss
+                wandb.log({'discSelf_loss':losses['discSelf_loss'], 'discCross_loss':losses['discCross_loss'], 'match_loss':losses['match_loss']})
                 
-        del src, trg, src_center, trg_center
+        del src, trg
              
     
     # Draw class pck
-    if False and (epoch % 2)==0:
-        draw_class_pck_path = os.path.join(Logger.logpath, "draw_class_pck")
-        os.makedirs(draw_class_pck_path, exist_ok=True)
-        class_pth = utils.draw_class_pck(
-            average_meter.sel_buffer["votes_geo"], draw_class_pck_path, epoch, step
-        )
-        if args.use_wandb and dist.get_rank() == 0:
-            wandb.log(
-                {
-                    "class_pck": wandb.Image(Image.open(class_pth).convert("RGB")),
-                }
-            )
+    # if False and (epoch % 2)==0:
+    #     draw_class_pck_path = os.path.join(Logger.logpath, "draw_class_pck")
+    #     os.makedirs(draw_class_pck_path, exist_ok=True)
+    #     class_pth = utils.draw_class_pck(
+    #         average_meter.sel_buffer["votes_geo"], draw_class_pck_path, epoch, step
+    #     )
+    #     if args.use_wandb and dist.get_rank() == 0:
+    #         wandb.log(
+    #             {
+    #                 "class_pck": wandb.Image(Image.open(class_pth).convert("RGB")),
+    #             }
+    #         )
 
     # 3. log epoch loss, epoch pck
     if dist.get_rank() == 0:
         average_meter.write_result(model_stage, epoch)
 
-    avg_loss = utils.mean(average_meter.loss_buffer)
+   
+    avg_loss = utils.mean(average_meter.loss_buffer['Loss'])
     avg_pck = utils.mean(average_meter.pck_buffer)
 
     return avg_loss, avg_pck
@@ -275,7 +280,7 @@ def make_dataloader(args, rank, world_size):
     if args.split not in ["val", "trnval"]:
         val_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, "val", args.cam, img_side=img_side, use_resize=True, use_batch=args.use_batch)
         val_sampler = DistributedSampler(val_ds)
-        val_dl = DataLoader(dataset=val_ds, batch_size=args.batch_size, num_workers=num_workers, sampler=val_sampler, pin_memory=pin_memory)
+        val_dl = DataLoader(dataset=val_ds, batch_size=args.batch_size, sampler=val_sampler, num_workers=num_workers, pin_memory=pin_memory)
     
     Logger.info("loading dataset finished")
 
@@ -391,7 +396,8 @@ def main(args):
         if args.loss == 'weak':
             wandb.define_metric("disc_grad", step_metric="iters")
             wandb.define_metric("match_grad", step_metric="iters")
-            wandb.define_metric("disc_loss", step_metric="iters")
+            wandb.define_metric("discSelf_loss", step_metric="iters")
+            wandb.define_metric("discCross_loss", step_metric="iters")
             wandb.define_metric("match_loss", step_metric="iters")
         
     ####    9. Train SCOT  ####
@@ -407,7 +413,7 @@ def main(args):
         trn_loss, trn_pck = train(epoch, model, trn_dl, loss_func, optimizer, args, device, 'train')
         log_benchmark["trn_loss"] = trn_loss
         log_benchmark["trn_pck"] = trn_pck
-        
+
         # validation
         if args.split not in ["val", "trnval"]:
             with torch.no_grad():
