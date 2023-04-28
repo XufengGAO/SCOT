@@ -7,13 +7,13 @@ import torch.nn as nn
 import numpy as np
 from model.objective import Objective
 import torch.nn.functional as F
-import norm as Norm
+from .norm import unit_gaussian_normalize, l1normalize, linearnormalize
 
 class StrongCrossEntropyLoss(nn.Module):
     r"""Strongly-supervised cross entropy loss"""
     def __init__(self, alpha=0.1) -> None:
-        super(StrongCrossEntropyLoss).__init__()
-        assert alpha < 0.0, "negative alpha is not allowed"
+        super(StrongCrossEntropyLoss, self).__init__()
+        assert alpha > 0.0, "negative alpha is not allowed"
         self.softmax = torch.nn.Softmax(dim=1)
         self.alpha = alpha
         self.eps = 1e-30
@@ -22,7 +22,7 @@ class StrongCrossEntropyLoss(nn.Module):
         loss_buf = x.new_zeros(x.size(0))
 
         # normalize each row of coefficient, de-mean and unit-std
-        x = Norm.unit_gaussian_normalize(x)
+        x = unit_gaussian_normalize(x)
 
         for idx, (ct, thres, npt) in enumerate(zip(x, pckthres, n_pts)):
 
@@ -53,8 +53,8 @@ class StrongCrossEntropyLoss(nn.Module):
 class WeakDiscMatchLoss(nn.Module):
     r"""Weakly-supervised discriminative and maching loss"""
     def __init__(self, weak_lambda: torch.Tensor, weak_mode='custom_lambda', alpha=0.1, temp=1.0,  match_norm_type='l1') -> None:
-        super(WeakDiscMatchLoss).__init__()
-        assert alpha < 0.0, "negative alpha is not allowed"
+        super(WeakDiscMatchLoss, self).__init__()
+        assert alpha > 0.0, "negative alpha is not allowed"
         self.softmax = torch.nn.Softmax(dim=1)
         self.alpha = alpha
         self.eps = 1e-30
@@ -86,7 +86,7 @@ class WeakDiscMatchLoss(nn.Module):
         r"""Computes information entropy of all candidate matches"""
         #correlation_matrix = Correlation.mutual_nn_filter(correlation_matrix)
 
-        norm = {'l1':Norm.l1normalize, 'linear':Norm.linearnormalize}
+        norm = {'l1':l1normalize, 'linear':linearnormalize}
         src_pdf = norm[norm_type](correlation_matrix)
         trg_pdf = norm[norm_type](correlation_matrix.transpose(1,2))
 
@@ -143,7 +143,7 @@ class WeakDiscMatchLoss(nn.Module):
 class StrongFlowLoss(nn.Module):
     r"""Strongly-supervised flow loss"""
     def __init__(self) -> None:
-        super(StrongFlowLoss).__init__()
+        super(StrongFlowLoss, self).__init__()
         self.eps = 1e-30
 
     def forward(self, x: torch.Tensor, flow_gt, feat_size):

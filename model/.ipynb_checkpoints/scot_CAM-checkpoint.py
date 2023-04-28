@@ -464,9 +464,3 @@ class SCOT_CAM(nn.Module):
 
     def load_state_dict(self, state_dict):
         self.learner.load_state_dict(state_dict)
-
-    def eval(self):
-        self.learner.eval()
-
-    def train(self):
-        self.learner.train()

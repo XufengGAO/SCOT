@@ -17,12 +17,10 @@ class Logger:
                 
                 if args.optimizer == "sgd":
                     logpath = logpath + "_m%.2f"%(args.momentum)
-                if args.use_scheduler:
+                if args.scheduler != 'none':
                     logpath = logpath + "_%s"%(args.scheduler)
-                if args.use_scot2:
-                    logpath = logpath + "_scot2"   
-                    
-                logpath = logpath + "_%s_bsz%d"%(args.split, args.batch_size*args.world_size)
+    
+                logpath = logpath + "_bsz%d"%(args.batch_size)
 
                 cls.logpath = os.path.join('logs', 'ddp', 'train', args.backbone, args.selfsup, args.criterion, args.benchmark + "_%s"%(args.alpha), logpath)
                 filemode = 'w'
@@ -41,10 +39,10 @@ class Logger:
 
         logging.basicConfig(filemode=filemode,
                             filename=os.path.join(cls.logpath, 'log.txt'),
-                            level=logging.INFO if dist.get_rank()==0 else logging.WARN,
+                            level=logging.INFO,
                             format='%(message)s',
                             datefmt='%m-%d %H:%M:%S')
-
+        # if dist.get_rank()==0 else logging.WARN
         # Console log config
         console = logging.StreamHandler()
         console.setLevel(logging.INFO)
@@ -147,7 +145,7 @@ class AverageMeter:
                 self.loss_buffer[key].append(value)
 
     def write_result(self, split, epoch=-1):
-        msg = '*** %s ' % split
+        msg = '\n*** %s ' % split
         msg += '[@Epoch %02d] ' % epoch if epoch > -1 else ''
 
         if len(self.loss_buffer) > 0:

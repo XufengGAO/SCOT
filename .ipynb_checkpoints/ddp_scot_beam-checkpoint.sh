@@ -4,8 +4,8 @@
 benchmark="pfpascal"
 backbone="resnet50"
 nnodes=4
-master_addr="10.233.66.8"
-master_port=12359
+master_addr="10.233.80.191"
+master_port=12361
 
 # CUDA_VISIBLE_DEVICES=0 \
 python3 -m torch.distributed.launch --master_port=${master_port} --nproc_per_node=1 \
@@ -16,7 +16,7 @@ python3 -m torch.distributed.launch --master_port=${master_port} --nproc_per_nod
                                     --backbone $backbone \
                                     --weight_thres 0.10 \
                                     --select_all 0.90 \
-                                    --loss 'strong_ce'\
+                                    --criterion 'strong_ce'\
                                     --temp 1.0 \
                                     --weak_lambda 0.5 \
                                     --alpha 0.1 \
@@ -31,6 +31,5 @@ python3 -m torch.distributed.launch --master_port=${master_port} --nproc_per_nod
                                     --use_wandb True \
                                     --wandb_proj 'ddp_scot' \
                                     --loss_stage "votes" \
-                                    --split "trn" \
                                     --cam "mask/resnet50/200_300" \
                                     --img_side '(200,300)' 

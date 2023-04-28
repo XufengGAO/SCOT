@@ -57,12 +57,15 @@ def reduce_tensor(tensor):
 
 
 def train_one_epoch(
-    args, model, criterion, dataloader, optimizer, epoch, lr_scheduler=None,
+    args, model, criterion, dataloader, optimizer, epoch, lr_scheduler=None
 ):
-    model.module.train()
+    model.module.backbone.eval()
+    model.module.learner.train()
+
+    
     optimizer.zero_grad()
 
-    Logger.info(f'Current learning rate for different parameter groups: {[it["lr"] for it in optimizer.param_groups]}')
+    # Logger.info(f'Current learning rate for different parameter groups: {[it["lr"] for it in optimizer.param_groups]}')
 
     average_meter = AverageMeter(args.benchmark, dataloader.dataset.cls)
     total_steps = len(dataloader)
@@ -77,10 +80,12 @@ def train_one_epoch(
         data["trg_kps"] = data["trg_kps"].cuda(non_blocking=True)
         data["pckthres"] = data["pckthres"].cuda(non_blocking=True)
 
-        data["src_mask"], data["trg_mask"] = None, None
+        
         if "src_mask" in data.keys():
             data["src_mask"] = data["src_mask"].cuda(non_blocking=True)
             data["trg_mask"] = data["trg_mask"].cuda(non_blocking=True)
+        else:
+            data["src_mask"], data["trg_mask"] = None, None
 
         # 1. forward pass
         src, trg = model(
@@ -195,7 +200,7 @@ def train_one_epoch(
         losses["Loss"] = loss.item()
 
         # back propagation
-        optimizer.zero_grad()
+        optimizer.zero_grad()      
         loss.backward()
         if args.use_grad_clip:
             torch.nn.utils.clip_grad.clip_grad_value_(
@@ -243,7 +248,7 @@ def train_one_epoch(
             batch_pck = reduce_tensor(batch_pck)
 
             average_meter.update(batch_pck.item(), losses)
-            del batch_pck, losses
+            del batch_pck
 
         if args.use_wandb and dist.get_rank() == 0:
             wandb.log({"iters": step + epoch * total_steps})
@@ -302,8 +307,8 @@ def train_one_epoch(
     #         )
 
     # 3. log epoch loss, epoch pck
-    if dist.get_rank() == 0:
-        average_meter.write_result('Training', epoch)
+    # if dist.get_rank() == 0 or True:
+    average_meter.write_result('Training', epoch)
 
     avg_loss = utils.mean(average_meter.loss_buffer["Loss"])
     avg_pck = utils.mean(average_meter.pck_buffer)
@@ -312,7 +317,9 @@ def train_one_epoch(
 
 @torch.no_grad()
 def validate(args, model, criterion, dataloader, epoch):
-    model.module.eval()
+    model.module.backbone.eval()
+    model.module.learner.eval()
+    
     average_meter = AverageMeter(args.benchmark, dataloader.dataset.cls)
     total_steps = len(dataloader)
 
@@ -325,10 +332,11 @@ def validate(args, model, criterion, dataloader, epoch):
         data["trg_kps"] = data["trg_kps"].cuda(non_blocking=True)
         data["pckthres"] = data["pckthres"].cuda(non_blocking=True)
 
-        data["src_mask"], data["trg_mask"] = None, None
         if "src_mask" in data.keys():
             data["src_mask"] = data["src_mask"].cuda(non_blocking=True)
             data["trg_mask"] = data["trg_mask"].cuda(non_blocking=True)
+        else:
+            data["src_mask"], data["trg_mask"] = None, None
 
         # 1. forward pass
         src, trg = model(
@@ -429,7 +437,7 @@ def validate(args, model, criterion, dataloader, epoch):
         elif args.criterion == "flow":
             pass
         elif args.criterion == "weak":
-            loss,  discSelf_loss, discCross_loss, match_loss = criterion(
+            loss, discSelf_loss, discCross_loss, match_loss = criterion(
                 cross_sim,
                 src_sim,
                 trg_sim,
@@ -479,57 +487,22 @@ def validate(args, model, criterion, dataloader, epoch):
         dist.barrier()
         # all reduce to update all processes
 
-        losses = reduce_results(losses)
-        batch_pck = reduce_tensor(batch_pck)
+        # losses = reduce_results(losses)
+        # batch_pck = reduce_tensor(batch_pck)
 
         average_meter.update(batch_pck.item(), losses)
-        del batch_pck, losses
-
-        if args.use_wandb and dist.get_rank() == 0:
-            wandb.log({"iters": step + epoch * total_steps})
+        del batch_pck
 
         # 5. print running pck, loss
         if (step % 20 == 0) and dist.get_rank() == 0:
             average_meter.write_process(step, len(dataloader), epoch)
 
-        # 6. draw weight map
-        if (step % 40 == 0) and dist.get_rank() == 0:
-            # 1. Draw weight map
-            weight_map_path = os.path.join(Logger.logpath, "weight_map")
-            os.makedirs(weight_map_path, exist_ok=True)
-            weight_pth = utils.draw_weight_map(
-                model.module.learner.layerweight.detach().clone().view(-1),
-                epoch,
-                step,
-                weight_map_path,
-            )
-
-            if args.use_wandb:
-                wandb.log(
-                    {
-                        "weight_map": wandb.Image(
-                            Image.open(weight_pth).convert("RGB")
-                        ),
-                    }
-                )
-
-        # 7. collect gradients
-        if args.criterion == "weak":
-            if args.use_wandb and dist.get_rank() == 0:
-                wandb.log(
-                    {
-                        "discSelf_loss": losses["discSelf_loss"],
-                        "discCross_loss": losses["discCross_loss"],
-                        "match_loss": losses["match_loss"],
-                    }
-                )
-
         del src, trg
         torch.cuda.empty_cache()
 
     # 3. log epoch loss, epoch pck
-    if dist.get_rank() == 0:
-        average_meter.write_result('Training', epoch)
+    # if dist.get_rank() == 0 or True:
+    average_meter.write_result('Validation', epoch)
 
     avg_loss = utils.mean(average_meter.loss_buffer["Loss"])
     avg_pck = utils.mean(average_meter.pck_buffer)
@@ -554,10 +527,6 @@ def init_distributed_mode(args):
         os.environ["MASTER_ADDR"] = "127.0.0.1"
         os.environ["MASTER_PORT"] = "29500"
     else:
-        # print("Not using distributed mode")
-        # args.rank = -1
-        # args.world_size = -1
-        # this code only supports ddp training
         print("Does not support training without GPU.")
         sys.exit(1)
 
@@ -620,7 +589,7 @@ def build_dataloader(args, rank, world_size):
     )
     data_loader_val = DataLoader(
         dataset=dataset_val,
-        batch_size=args.batch_size,
+        batch_size=8,
         sampler=sampler_val,
         num_workers=num_workers,
         pin_memory=pin_memory,
@@ -635,10 +604,10 @@ def build_dataloader(args, rank, world_size):
 
 def build_scheduler(args, optimizer, n_iter_per_epoch, config=None):
     # modified later
-    num_steps = int(config.TRAIN.EPOCHS * n_iter_per_epoch)
-    warmup_steps = int(config.TRAIN.WARMUP_EPOCHS * n_iter_per_epoch)
-    decay_steps = int(config.TRAIN.LR_SCHEDULER.DECAY_EPOCHS * n_iter_per_epoch)
-    multi_steps = [i * n_iter_per_epoch for i in config.TRAIN.LR_SCHEDULER.MULTISTEPS]
+    # num_steps = int(config.TRAIN.EPOCHS * n_iter_per_epoch)
+    # warmup_steps = int(config.TRAIN.WARMUP_EPOCHS * n_iter_per_epoch)
+    # decay_steps = int(config.TRAIN.LR_SCHEDULER.DECAY_EPOCHS * n_iter_per_epoch)
+    # multi_steps = [i * n_iter_per_epoch for i in config.TRAIN.LR_SCHEDULER.MULTISTEPS]
 
     lr_scheduler = None
     if args.scheduler == "cycle":
@@ -747,7 +716,7 @@ def build_wandb(args, rank):
         wandb_name = (
             wandb_name
             + "_bsz%d" % (args.batch_size)
-            + "_%s_%s_%s_alp%.2f" % (args.selfsup, args.backbone, args.alpha)
+            + "_%s_%s_alp%.2f" % (args.selfsup, args.backbone, args.alpha)
         )
 
         _wandb = wandb.init(
@@ -788,9 +757,9 @@ def save_checkpoint(args, epoch, model, max_pck, optimizer, lr_scheduler):
         save_state['lr_scheduler'] = lr_scheduler.state_dict()
 
     save_path = os.path.join(args.logpath, f'ckpt_epoch_{epoch}.pth')
-    Logger.info(f"{save_path} saving......")
+    # Logger.info(f"{save_path} saving......")
     torch.save(save_state, save_path)
-    Logger.info(f"{save_path} saved !!!")
+    # Logger.info(f"{save_path} saved !!!")
 
 def main(args):
     # ============ 1. Init Logger ... ============
@@ -813,7 +782,7 @@ def main(args):
     assert args.backbone in ["resnet50", "resnet101", "fcn101"], "Unknown backbone"
     n_layers = {"resnet50": 17, "resnet101": 34, "fcn101": 34}
     hyperpixels = list(range(n_layers[args.backbone]))
-    Logger.info(f"Creating model:{args.backbone}/{args.selfsup}")
+    Logger.info(f">>>>>>>>>> Creating model:{args.backbone}/{args.selfsup}")
     model = scot_CAM.SCOT_CAM(
         args.backbone,
         hyperpixels,
@@ -859,36 +828,43 @@ def main(args):
 
     # check # of training params
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    Logger.info(f"number of training params: {n_parameters}")
+    Logger.info(f">>>>>>>>>> number of training params: {n_parameters}")
 
     # resume the model
-    max_pck = load_checkpoint(args, model_without_ddp, optimizer, lr_scheduler)
-
+    if args.resume:
+        max_pck = load_checkpoint(args, model_without_ddp, optimizer, lr_scheduler)
+    else:
+        max_pck = 0.0
     # ============ 6. Evaluator, Wandb ... ============
     Evaluator.initialize(args.alpha)
     build_wandb(args, rank)
 
     # ============ 7. Start training ... ============
     log_benchmark = {}
-    Logger.info("Start training")
-    start_time = time.time()
+    Logger.info(">>>>>>>>>> Start training")
+    
     for epoch in range(args.start_epoch, args.epochs):
         data_loader_train.sampler.set_epoch(epoch)
 
         # train
+        start_time = time.time()
         trn_loss, trn_pck = train_one_epoch(
             args, model, criterion, data_loader_train, optimizer, epoch, lr_scheduler
         )
         log_benchmark["trn_loss"] = trn_loss
         log_benchmark["trn_pck"] = trn_pck
+        end_train_time = (time.time()-start_time)/60
+        print(epoch, model.module.learner.layerweight.detach().clone().view(-1))
 
         # validation
+        start_time = time.time()
         val_loss, val_pck = validate(
-            args, model, criterion, data_loader_val
+            args, model, criterion, data_loader_val, epoch
         )
         log_benchmark["val_loss"] = val_loss
         log_benchmark["val_pck"] = val_pck
-
+        end_val_time = (time.time()-start_time)/60
+        
         # save_e = 1 if args.split == "trnval" else 5
         # if (epoch%save_e)==0:
         #     Logger.save_epoch(model, epoch, model_pck["votes_geo"])
@@ -903,14 +879,11 @@ def main(args):
         if args.use_wandb and rank == 0:
             wandb.log({"epochs": epoch})
             wandb.log(log_benchmark)
-
-        if rank == 0:
-            time_message = (
-                "Training %d epochs took:%4.3f\n"
-                % (epoch + 1, (time.time() - start_time) / 60)
-                + " minutes"
-            )
-            Logger.info(time_message)
+            
+        time_message = (
+            ">>>>>>>>>> Train/Eval %d epochs took:%4.3f/%4.3f"%(epoch + 1, end_train_time, end_val_time)+" minutes"
+        )
+        Logger.info(time_message)
 
     Logger.info("==================== Finished training ====================")
 
@@ -940,7 +913,7 @@ if __name__ == "__main__":
     parser.add_argument('--optimizer', type=str, default="sgd", choices=["sgd", "adamw"])
     parser.add_argument('--weight_decay', type=float, default=0.00, help='weight decay (default: 0.00)')
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum (default: 0.9)')
-    parser.add_argument("--scheduler", type=str, default="cycle", choices=['none', 'step', 'cycle', 'cosine'])
+    parser.add_argument("--scheduler", type=str, default="none", choices=['none', 'step', 'cycle', 'cosine'])
     parser.add_argument('--step_size', type=int, default=16, help='hyperparameters for step scheduler')
     parser.add_argument('--step_gamma', type=float, default=0.1, help='hyperparameters for step scheduler')
     
