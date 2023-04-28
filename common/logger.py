@@ -24,14 +24,14 @@ class Logger:
                     
                 logpath = logpath + "_%s_bsz%d"%(args.split, args.batch_size*args.world_size)
 
-                cls.logpath = os.path.join('logs', 'ddp', 'train', args.backbone, args.selfsup, args.loss, args.benchmark + "_%s"%(args.alpha), logpath)
+                cls.logpath = os.path.join('logs', 'ddp', 'train', args.backbone, args.selfsup, args.criterion, args.benchmark + "_%s"%(args.alpha), logpath)
                 filemode = 'w'
             else:
                 cls.logpath = args.logpath
                 filemode = 'a'
         else:
             # logtime = datetime.datetime.now().__format__('_%m%d_%H%M%S')
-            cls.logpath = os.path.join('logs', 'test', args.backbone, args.selfsup, args.loss, args.benchmark, args.logpath)
+            cls.logpath = os.path.join('logs', 'test', args.backbone, args.selfsup, args.criterion, args.benchmark, args.logpath)
             filemode = 'w'
         
         if dist.get_rank() == 0:
@@ -72,9 +72,9 @@ class Logger:
         cls.info('Epoch Model saved @%d w/ val. PCK: %5.4f on [%s]\n' % (epoch, val_pck, os.path.join(cls.logpath, 'eooch_%d.pt'%(epoch))))
     
     @classmethod
-    def save_model(cls, model, epoch, val_pck, old_val_pck):
+    def save_model(cls, model, epoch, val_pck, best_val_pck):
         torch.save(model.state_dict(), os.path.join(cls.logpath, 'best_model.pt'))
-        cls.info('Best Model saved @%d w/ val. PCK: %5.4f -> %5.4f on [%s]\n' % (epoch, old_val_pck, val_pck, os.path.join(cls.logpath, 'best_model.pt')))
+        cls.info('Best Model saved @%d w/ val. PCK: %5.4f -> %5.4f on [%s]\n' % (epoch, best_val_pck, val_pck, os.path.join(cls.logpath, 'best_model.pt')))
 
 
 class AverageMeter:
@@ -154,7 +154,7 @@ class AverageMeter:
             for key, value in self.loss_buffer.items():
                 msg += '%s: %4.2f  ' % (key, mean(value))
 
-        msg += 'PCK in buf: %4.2f' % (sum(self.pck_buffer) / len(self.pck_buffer))
+        msg += 'PCK in buf: %4.2f' % (mean(self.pck_buffer))
 
         msg += '***\n'
         Logger.info(msg)

@@ -4,7 +4,7 @@ r"""Beam search for hyperpixel layers"""
 import datetime
 import argparse
 import os
-
+import sys
 from torch.utils.data import DataLoader
 import torch
 import time
@@ -12,7 +12,7 @@ from PIL import Image
 from data import download
 from model import scot_CAM, util, geometry
 from model.objective import Objective
-from common import loss
+from common.loss import StrongCrossEntropyLoss, StrongFlowLoss, WeakDiscMatchLoss
 from common import utils
 from common.logger import AverageMeter, Logger
 from common.evaluation import Evaluator
@@ -21,9 +21,10 @@ from pprint import pprint
 import wandb
 from model.base.geometry import Geometry
 from model import util
+import re
+import torch.backends.cudnn as cudnn
 
 # DDP package
-from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 import tempfile
 from torch import distributed as dist
@@ -31,7 +32,8 @@ from collections import OrderedDict
 
 wandb.login()
 
-def all_reduce_results(results):
+
+def reduce_results(results):
     """Coalesced mean all reduce over a dictionary of 0-dimensional tensors"""
     names, values = [], []
     for k, v in results.items():
@@ -47,149 +49,206 @@ def all_reduce_results(results):
     # Reconstruct the dictionary
     return OrderedDict((k, v.item()) for k, v in zip(names, values))
 
-def train(epoch, model, dataloader, loss_func, optimizer, args, device, model_stage = 'train'):
-    r"""Code for training SCOT"""
-    if model_stage == 'train':
-        model.module.train()
-    else:
-        model.module.eval()
-        # dataloader.sampler.set_epoch(epoch)
-    dataloader.sampler.set_epoch(epoch)
-    
+def reduce_tensor(tensor):
+    rt = tensor.clone()
+    dist.all_reduce(rt, op=dist.ReduceOp.SUM)
+    rt /= dist.get_world_size()
+    return rt
+
+
+def train_one_epoch(
+    args, model, criterion, dataloader, optimizer, epoch, lr_scheduler=None,
+):
+    model.module.train()
+    optimizer.zero_grad()
+
+    Logger.info(f'Current learning rate for different parameter groups: {[it["lr"] for it in optimizer.param_groups]}')
+
     average_meter = AverageMeter(args.benchmark, dataloader.dataset.cls)
     total_steps = len(dataloader)
 
     losses = {}
-    # Training
+
     for step, data in enumerate(dataloader):
-        optimizer.zero_grad()
-        iters = step + epoch * total_steps
-        if args.use_wandb and dist.get_rank()==0:
-            wandb.log({'iters':iters})
+        data["src_img"] = data["src_img"].cuda(non_blocking=True)
+        data["trg_img"] = data["trg_img"].cuda(non_blocking=True)
+        data["src_kps"] = data["src_kps"].cuda(non_blocking=True)
+        data["n_pts"] = data["n_pts"].cuda(non_blocking=True)
+        data["trg_kps"] = data["trg_kps"].cuda(non_blocking=True)
+        data["pckthres"] = data["pckthres"].cuda(non_blocking=True)
 
-        data['src_img'] = data['src_img'].to(device)
-        data['trg_img'] = data['trg_img'].to(device)
-        data['src_kps'] = data['src_kps'].to(device)
-        data['n_pts'] = data['n_pts'].to(device)
-        data['trg_kps'] = data['trg_kps'].to(device)
-        data['pckthres'] = data['pckthres'].to(device)
-
+        data["src_mask"], data["trg_mask"] = None, None
         if "src_mask" in data.keys():
-            data["src_mask"] = data["src_mask"].to(device)
-            data["trg_mask"] = data["trg_mask"].to(device)
-        else:
-            data["src_mask"] = None
-            data["trg_mask"] = None
+            data["src_mask"] = data["src_mask"].cuda(non_blocking=True)
+            data["trg_mask"] = data["trg_mask"].cuda(non_blocking=True)
 
         # 1. forward pass
         src, trg = model(
-            data['src_img'],
-            data['trg_img'],
+            data["src_img"],
+            data["trg_img"],
             args.classmap,
             data["src_mask"],
             data["trg_mask"],
             args.backbone,
-            model_stage,
+            'train',
         )
 
         # {'box', 'feats', 'imsize', 'weights'}
         # 2. calculate sim
-        assert args.loss_stage in ['sim', 'sim_geo', 'votes', 'votes_geo'], "Unrecognized loss stage"
+        assert args.loss_stage in ["sim", "sim_geo", "votes", "votes_geo",], "Unknown loss stage"
         cross_sim, src_sim, trg_sim = 0, 0, 0
-        if 'sim' in args.loss_stage:
-            cross_sim = model.module.calculate_sim(src['feats'], trg['feats'])
-            if args.loss == 'weak':
-                src_sim = model.module.calculate_sim(src['feats'], src['feats'])
-                trg_sim = model.module.calculate_sim(trg['feats'], trg['feats'])
+        if "sim" in args.loss_stage:
+            cross_sim = model.module.calculate_sim(src["feats"], trg["feats"])
+            if args.criterion == "weak":
+                src_sim = model.module.calculate_sim(src["feats"], src["feats"])
+                trg_sim = model.module.calculate_sim(trg["feats"], trg["feats"])
 
-        if 'votes' in args.loss_stage:
-            src_size = (src['feats'].size()[0], src['feats'].size()[1])
-            trg_size = (trg['feats'].size()[0], trg['feats'].size()[1])
-            cross_sim = model.module.calculate_votes(src['feats'], trg['feats'], args.epsilon, args.exp2, src_size, trg_size, src['weights'], trg['weights'])
-            if args.loss == 'weak':
-                src_sim = model.module.calculate_votes(src['feats'], src['feats'], args.epsilon, args.exp2, src_size, src_size, src['weights'], src['weights'])
-                trg_sim = model.module.calculate_votes(trg['feats'], trg['feats'], args.epsilon, args.exp2, trg_size, trg_size, trg['weights'], trg['weights'])
-        
-        if 'geo' in args.loss_stage:
-            cross_sim = model.module.calculate_votesGeo(cross_sim, src['imsize'], trg['imsize'], src['box'], trg['box'])
-            if args.loss == 'weak':
-                src_sim = model.module.calculate_votesGeo(src_sim, src['imsize'], src['imsize'], src['box'], src['box'])
-                trg_sim = model.module.calculate_votesGeo(trg_sim, trg['imsize'], trg['imsize'], trg['box'], trg['box'])
+        if "votes" in args.loss_stage:
+            src_size = (src["feats"].size()[0], src["feats"].size()[1])
+            trg_size = (trg["feats"].size()[0], trg["feats"].size()[1])
+            cross_sim = model.module.calculate_votes(
+                src["feats"],
+                trg["feats"],
+                args.epsilon,
+                args.exp2,
+                src_size,
+                trg_size,
+                src["weights"],
+                trg["weights"],
+            )
+            if args.criterion == "weak":
+                src_sim = model.module.calculate_votes(
+                    src["feats"],
+                    src["feats"],
+                    args.epsilon,
+                    args.exp2,
+                    src_size,
+                    src_size,
+                    src["weights"],
+                    src["weights"],
+                )
+                trg_sim = model.module.calculate_votes(
+                    trg["feats"],
+                    trg["feats"],
+                    args.epsilon,
+                    args.exp2,
+                    trg_size,
+                    trg_size,
+                    trg["weights"],
+                    trg["weights"],
+                )
+
+        if "geo" in args.loss_stage:
+            cross_sim = model.module.calculate_votesGeo(
+                cross_sim, src["imsize"], trg["imsize"], src["box"], trg["box"]
+            )
+            if args.criterion == "weak":
+                src_sim = model.module.calculate_votesGeo(
+                    src_sim, src["imsize"], src["imsize"], src["box"], src["box"]
+                )
+                trg_sim = model.module.calculate_votesGeo(
+                    trg_sim, trg["imsize"], trg["imsize"], trg["box"], trg["box"]
+                )
 
         # 3. calculate loss
         src_center = 0
         trg_center = 0
-        if args.loss == "strong_ce":
+        if args.criterion == "strong_ce":
             with torch.no_grad():
-                src_center = geometry.center(src['box'])
-                trg_center = geometry.center(trg['box'])
-                data['src_kpidx'] = utils.match_idx(data['src_kps'], data['n_pts'], src_center)    
-                data['trg_kpidx'] = utils.match_idx(data['trg_kps'], data['n_pts'], trg_center)
+                src_center = geometry.center(src["box"])
+                trg_center = geometry.center(trg["box"])
+                data["src_kpidx"] = utils.match_idx(
+                    data["src_kps"], data["n_pts"], src_center
+                )
+                data["trg_kpidx"] = utils.match_idx(
+                    data["trg_kps"], data["n_pts"], trg_center
+                )
                 # prediction and evaluation for current loss stage
                 prd_kps = geometry.predict_kps(
-                                    src['box'],
-                                    trg['box'],
-                                    data["src_kps"],
-                                    data["n_pts"],
-                                    cross_sim.detach().clone(),
-                                    ) # predicted points
-                eval_result = Evaluator.eval_kps_transfer(prd_kps, data, args.loss) # return dict results
-            loss = loss_func.compute_loss(cross_sim, eval_result, data['pckthres'], data['n_pts'])
-
+                    src["box"],
+                    trg["box"],
+                    data["src_kps"],
+                    data["n_pts"],
+                    cross_sim.detach().clone(),
+                )  # predicted points
+                eval_result = Evaluator.eval_kps_transfer(
+                    prd_kps, data, args.criterion
+                )  # return dict results
+            loss = criterion(
+                cross_sim, eval_result['easy_match'], eval_result['hard_match'], data["pckthres"], data["n_pts"]
+            )
             del prd_kps, eval_result, src_center, trg_center
-        elif args.loss == 'flow':
-            data['flow'] = Geometry.KpsToFlow(data['src_kps'], data['trg_kps'], data['n_pts'])
-            loss = loss_func.compute_loss(cross_sim, data['flow'], model.module.feat_size)
-        elif args.loss == 'weak':
-            discSelf_loss, discCross_loss, match_loss = loss_func.compute_loss(cross_sim, src_sim, trg_sim, src['feats'], trg['feats'], args.weak_norm, args.temp)
-            loss = 0.5 * discSelf_loss + 1.0 * discCross_loss + 10 * match_loss
-            losses['discSelf_loss'] = discSelf_loss.item()
-            losses['discCross_loss'] = discCross_loss.item()
-            losses['match_loss'] = match_loss.item()
+        elif args.criterion == "flow":
+            pass
+        elif args.criterion == "weak":
+            loss,  discSelf_loss, discCross_loss, match_loss = criterion(
+                cross_sim,
+                src_sim,
+                trg_sim,
+                src["feats"],
+                trg["feats"],
+            )
+            losses["discSelf_loss"] = discSelf_loss.item()
+            losses["discCross_loss"] = discCross_loss.item()
+            losses["match_loss"] = match_loss.item()
 
-        losses['Loss'] = loss.item()
+        losses["Loss"] = loss.item()
+
         # back propagation
-        if model_stage == 'train':
-            loss.backward()
-            if args.use_grad_clip:
-                torch.nn.utils.clip_grad.clip_grad_value_(model.module.parameters(), args.grad_clip)
-            optimizer.step()
+        optimizer.zero_grad()
+        loss.backward()
+        if args.use_grad_clip:
+            torch.nn.utils.clip_grad.clip_grad_value_(
+                model.parameters(), args.grad_clip
+            )
+        optimizer.step()
         del loss, cross_sim
-      
+
         # 4. collect results
         with torch.no_grad():
             batch_pck = 0
-            src_size = (src['feats'].size()[0], src['feats'].size()[1])
-            trg_size = (trg['feats'].size()[0], trg['feats'].size()[1])
-            votes = model.module.calculate_votes(src['feats'], trg['feats'], args.epsilon, args.exp2, src_size, trg_size, src['weights'], trg['weights'])
-            votes_geo = model.module.calculate_votesGeo(votes, src['imsize'], trg['imsize'], src['box'], trg['box'])
+            src_size = (src["feats"].size()[0], src["feats"].size()[1])
+            trg_size = (trg["feats"].size()[0], trg["feats"].size()[1])
+            votes = model.module.calculate_votes(
+                src["feats"],
+                trg["feats"],
+                args.epsilon,
+                args.exp2,
+                src_size,
+                trg_size,
+                src["weights"],
+                trg["weights"],
+            )
+            votes_geo = model.module.calculate_votesGeo(
+                votes, src["imsize"], trg["imsize"], src["box"], trg["box"]
+            )
             prd_kps = geometry.predict_kps(
-                        src['box'],
-                        trg['box'],
-                        data["src_kps"],
-                        data["n_pts"],
-                        votes_geo,
-                        ) # predicted points
-            eval_result = Evaluator.eval_kps_transfer(prd_kps, data, args.loss, pck_only=True) # return dict results
+                src["box"],
+                trg["box"],
+                data["src_kps"],
+                data["n_pts"],
+                votes_geo,
+            )  # predicted points
+            eval_result = Evaluator.eval_kps_transfer(
+                prd_kps, data, args.criterion, pck_only=True
+            )  # return dict results
             # prd_kps_list[key] = prd_kps
-            batch_pck = torch.tensor(utils.mean(eval_result['pck'])).cuda()
+            batch_pck = torch.tensor(utils.mean(eval_result["pck"])).cuda()
             del votes, votes_geo, eval_result
-            
+
             dist.barrier()
             # all reduce to update all processes
-            if model_stage == 'train' or True:
-                losses = all_reduce_results(losses)
-                dist.all_reduce(batch_pck, dist.ReduceOp.SUM)
-                batch_pck /= dist.get_world_size()
-            if model_stage != 'train':
-                print('after reduce %d '%(step), losses)
-            average_meter.update(
-                batch_pck,
-                losses,
-            )
-            del batch_pck
-        
-        # 5. print running pck, loss    
+
+            losses = reduce_results(losses)
+            batch_pck = reduce_tensor(batch_pck)
+
+            average_meter.update(batch_pck.item(), losses)
+            del batch_pck, losses
+
+        if args.use_wandb and dist.get_rank() == 0:
+            wandb.log({"iters": step + epoch * total_steps})
+
+        # 5. print running pck, loss
         if (step % 20 == 0) and dist.get_rank() == 0:
             average_meter.write_process(step, len(dataloader), epoch)
 
@@ -208,20 +267,26 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device, model_st
             if args.use_wandb:
                 wandb.log(
                     {
-                        "weight_map": wandb.Image(Image.open(weight_pth).convert("RGB")),
+                        "weight_map": wandb.Image(
+                            Image.open(weight_pth).convert("RGB")
+                        ),
                     }
                 )
 
-        # 5. collect gradients
-        if args.loss == 'weak':
-            #print('disc_loss = %.2f, disc_grad = %.2f, match_loss = %.2f, match_grad = %.2f'%(disc_loss.item(), disc_loss.grad.item(), match_loss.item(), match_loss.grad.item()))
+        # 7. collect gradients
+        if args.criterion == "weak":
             if args.use_wandb and dist.get_rank() == 0:
-                #wandb.log({'disc_grad':disc_loss.grad.item(), 'match_grad':match_loss.grad.item()})
-                wandb.log({'discSelf_loss':losses['discSelf_loss'], 'discCross_loss':losses['discCross_loss'], 'match_loss':losses['match_loss']})
-                
+                wandb.log(
+                    {
+                        "discSelf_loss": losses["discSelf_loss"],
+                        "discCross_loss": losses["discCross_loss"],
+                        "match_loss": losses["match_loss"],
+                    }
+                )
+
         del src, trg
-             
-    
+        torch.cuda.empty_cache()
+
     # Draw class pck
     # if False and (epoch % 2)==0:
     #     draw_class_pck_path = os.path.join(Logger.logpath, "draw_class_pck")
@@ -238,78 +303,517 @@ def train(epoch, model, dataloader, loss_func, optimizer, args, device, model_st
 
     # 3. log epoch loss, epoch pck
     if dist.get_rank() == 0:
-        average_meter.write_result(model_stage, epoch)
+        average_meter.write_result('Training', epoch)
 
-   
-    avg_loss = utils.mean(average_meter.loss_buffer['Loss'])
+    avg_loss = utils.mean(average_meter.loss_buffer["Loss"])
+    avg_pck = utils.mean(average_meter.pck_buffer)
+
+    return avg_loss, avg_pck
+
+@torch.no_grad()
+def validate(args, model, criterion, dataloader, epoch):
+    model.module.eval()
+    average_meter = AverageMeter(args.benchmark, dataloader.dataset.cls)
+    total_steps = len(dataloader)
+
+    losses = {}
+    for step, data in enumerate(dataloader):
+        data["src_img"] = data["src_img"].cuda(non_blocking=True)
+        data["trg_img"] = data["trg_img"].cuda(non_blocking=True)
+        data["src_kps"] = data["src_kps"].cuda(non_blocking=True)
+        data["n_pts"] = data["n_pts"].cuda(non_blocking=True)
+        data["trg_kps"] = data["trg_kps"].cuda(non_blocking=True)
+        data["pckthres"] = data["pckthres"].cuda(non_blocking=True)
+
+        data["src_mask"], data["trg_mask"] = None, None
+        if "src_mask" in data.keys():
+            data["src_mask"] = data["src_mask"].cuda(non_blocking=True)
+            data["trg_mask"] = data["trg_mask"].cuda(non_blocking=True)
+
+        # 1. forward pass
+        src, trg = model(
+            data["src_img"],
+            data["trg_img"],
+            args.classmap,
+            data["src_mask"],
+            data["trg_mask"],
+            args.backbone,
+            'eval',
+        )
+
+        # {'box', 'feats', 'imsize', 'weights'}
+        # 2. calculate sim
+        assert args.loss_stage in ["sim", "sim_geo", "votes", "votes_geo",], "Unknown loss stage"
+        cross_sim, src_sim, trg_sim = 0, 0, 0
+        if "sim" in args.loss_stage:
+            cross_sim = model.module.calculate_sim(src["feats"], trg["feats"])
+            if args.criterion == "weak":
+                src_sim = model.module.calculate_sim(src["feats"], src["feats"])
+                trg_sim = model.module.calculate_sim(trg["feats"], trg["feats"])
+
+        if "votes" in args.loss_stage:
+            src_size = (src["feats"].size()[0], src["feats"].size()[1])
+            trg_size = (trg["feats"].size()[0], trg["feats"].size()[1])
+            cross_sim = model.module.calculate_votes(
+                src["feats"],
+                trg["feats"],
+                args.epsilon,
+                args.exp2,
+                src_size,
+                trg_size,
+                src["weights"],
+                trg["weights"],
+            )
+            if args.criterion == "weak":
+                src_sim = model.module.calculate_votes(
+                    src["feats"],
+                    src["feats"],
+                    args.epsilon,
+                    args.exp2,
+                    src_size,
+                    src_size,
+                    src["weights"],
+                    src["weights"],
+                )
+                trg_sim = model.module.calculate_votes(
+                    trg["feats"],
+                    trg["feats"],
+                    args.epsilon,
+                    args.exp2,
+                    trg_size,
+                    trg_size,
+                    trg["weights"],
+                    trg["weights"],
+                )
+
+        if "geo" in args.loss_stage:
+            cross_sim = model.module.calculate_votesGeo(
+                cross_sim, src["imsize"], trg["imsize"], src["box"], trg["box"]
+            )
+            if args.criterion == "weak":
+                src_sim = model.module.calculate_votesGeo(
+                    src_sim, src["imsize"], src["imsize"], src["box"], src["box"]
+                )
+                trg_sim = model.module.calculate_votesGeo(
+                    trg_sim, trg["imsize"], trg["imsize"], trg["box"], trg["box"]
+                )
+
+        # 3. calculate loss
+        src_center = 0
+        trg_center = 0
+        if args.criterion == "strong_ce":
+            with torch.no_grad():
+                src_center = geometry.center(src["box"])
+                trg_center = geometry.center(trg["box"])
+                data["src_kpidx"] = utils.match_idx(
+                    data["src_kps"], data["n_pts"], src_center
+                )
+                data["trg_kpidx"] = utils.match_idx(
+                    data["trg_kps"], data["n_pts"], trg_center
+                )
+                # prediction and evaluation for current loss stage
+                prd_kps = geometry.predict_kps(
+                    src["box"],
+                    trg["box"],
+                    data["src_kps"],
+                    data["n_pts"],
+                    cross_sim.detach().clone(),
+                )  # predicted points
+                eval_result = Evaluator.eval_kps_transfer(
+                    prd_kps, data, args.criterion
+                )  # return dict results
+            loss = criterion(
+                cross_sim, eval_result['easy_match'], eval_result['hard_match'], data["pckthres"], data["n_pts"]
+            )
+            del prd_kps, eval_result, src_center, trg_center
+        elif args.criterion == "flow":
+            pass
+        elif args.criterion == "weak":
+            loss,  discSelf_loss, discCross_loss, match_loss = criterion(
+                cross_sim,
+                src_sim,
+                trg_sim,
+                src["feats"],
+                trg["feats"],
+            )
+            losses["discSelf_loss"] = discSelf_loss.item()
+            losses["discCross_loss"] = discCross_loss.item()
+            losses["match_loss"] = match_loss.item()
+
+        losses["Loss"] = loss.item()
+
+        # back propagation
+        del loss, cross_sim
+
+        # 4. collect results
+        batch_pck = 0
+        src_size = (src["feats"].size()[0], src["feats"].size()[1])
+        trg_size = (trg["feats"].size()[0], trg["feats"].size()[1])
+        votes = model.module.calculate_votes(
+            src["feats"],
+            trg["feats"],
+            args.epsilon,
+            args.exp2,
+            src_size,
+            trg_size,
+            src["weights"],
+            trg["weights"],
+        )
+        votes_geo = model.module.calculate_votesGeo(
+            votes, src["imsize"], trg["imsize"], src["box"], trg["box"]
+        )
+        prd_kps = geometry.predict_kps(
+            src["box"],
+            trg["box"],
+            data["src_kps"],
+            data["n_pts"],
+            votes_geo,
+        )  # predicted points
+        eval_result = Evaluator.eval_kps_transfer(
+            prd_kps, data, args.criterion, pck_only=True
+        )  # return dict results
+        # prd_kps_list[key] = prd_kps
+        batch_pck = torch.tensor(utils.mean(eval_result["pck"])).cuda()
+        del votes, votes_geo, eval_result
+
+        dist.barrier()
+        # all reduce to update all processes
+
+        losses = reduce_results(losses)
+        batch_pck = reduce_tensor(batch_pck)
+
+        average_meter.update(batch_pck.item(), losses)
+        del batch_pck, losses
+
+        if args.use_wandb and dist.get_rank() == 0:
+            wandb.log({"iters": step + epoch * total_steps})
+
+        # 5. print running pck, loss
+        if (step % 20 == 0) and dist.get_rank() == 0:
+            average_meter.write_process(step, len(dataloader), epoch)
+
+        # 6. draw weight map
+        if (step % 40 == 0) and dist.get_rank() == 0:
+            # 1. Draw weight map
+            weight_map_path = os.path.join(Logger.logpath, "weight_map")
+            os.makedirs(weight_map_path, exist_ok=True)
+            weight_pth = utils.draw_weight_map(
+                model.module.learner.layerweight.detach().clone().view(-1),
+                epoch,
+                step,
+                weight_map_path,
+            )
+
+            if args.use_wandb:
+                wandb.log(
+                    {
+                        "weight_map": wandb.Image(
+                            Image.open(weight_pth).convert("RGB")
+                        ),
+                    }
+                )
+
+        # 7. collect gradients
+        if args.criterion == "weak":
+            if args.use_wandb and dist.get_rank() == 0:
+                wandb.log(
+                    {
+                        "discSelf_loss": losses["discSelf_loss"],
+                        "discCross_loss": losses["discCross_loss"],
+                        "match_loss": losses["match_loss"],
+                    }
+                )
+
+        del src, trg
+        torch.cuda.empty_cache()
+
+    # 3. log epoch loss, epoch pck
+    if dist.get_rank() == 0:
+        average_meter.write_result('Training', epoch)
+
+    avg_loss = utils.mean(average_meter.loss_buffer["Loss"])
     avg_pck = utils.mean(average_meter.pck_buffer)
 
     return avg_loss, avg_pck
 
 
 def init_distributed_mode(args):
-    """ init for distribute mode """
-    if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
-        args.rank = int(os.environ['RANK'])
-        args.world_size = int(os.environ['WORLD_SIZE'])
-        args.gpu = int(os.environ['LOCAL_RANK'])
-        print('local_rank = ', int(os.environ['LOCAL_RANK']), ' rank =', args.rank)
-    elif 'SLURM_PROCID' in os.environ:
-        args.rank = int(os.environ['SLURM_PROCID'])
-        args.gpu = args.rank % torch.cuda.device_count()
+    """init for distribute mode"""
+    # launched with torch.distributed.launch
+    if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
+        args.rank = int(os.environ["RANK"])
+        args.world_size = int(os.environ["WORLD_SIZE"])
+        args.local_rank = int(os.environ["LOCAL_RANK"])
+    # launched with submitit on a slurm cluster
+    elif "SLURM_PROCID" in os.environ:
+        args.rank = int(os.environ["SLURM_PROCID"])
+        args.local_rank = args.rank % torch.cuda.device_count()
+    elif torch.cuda.is_available():
+        print("Will run the code on one GPU.")
+        args.rank, args.local_rank, args.world_size = 0, 0, 1
+        os.environ["MASTER_ADDR"] = "127.0.0.1"
+        os.environ["MASTER_PORT"] = "29500"
     else:
-        print('Not using distributed mode')
-        args.distributed = False
-        return
-    
-    args.distributed = True
-    torch.cuda.set_device(args.gpu)
-    args.dist_backend = 'nccl'
-    dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url, world_size=args.world_size, rank=args.rank)
+        # print("Not using distributed mode")
+        # args.rank = -1
+        # args.world_size = -1
+        # this code only supports ddp training
+        print("Does not support training without GPU.")
+        sys.exit(1)
+
+    args.dist_backend = "nccl"
+    dist.init_process_group(
+        backend=args.dist_backend,
+        init_method=args.dist_url,
+        world_size=args.world_size,
+        rank=args.rank,
+    )
+
+    torch.cuda.set_device(args.local_rank)
+    print(
+        "| distributed init (rank {}): {}".format(args.rank, args.dist_url), flush=True
+    )
     dist.barrier()
 
-def make_dataloader(args, rank, world_size):
+
+def build_dataloader(args, rank, world_size):
     num_workers = 16 if torch.cuda.is_available() else 8
     pin_memory = True if torch.cuda.is_available() else False
-    
-    Logger.info("loading %s dataset"%(args.benchmark))
-    trn_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, args.split, args.cam, img_side=img_side, use_resize=True, use_batch=args.use_batch)
-    trn_sampler = DistributedSampler(trn_ds)
-    trn_dl = DataLoader(dataset=trn_ds, batch_size=args.batch_size, num_workers=num_workers, sampler=trn_sampler, pin_memory=pin_memory)
-    
-    if args.split not in ["val", "trnval"]:
-        val_ds = download.load_dataset(args.benchmark, args.datapath, args.thres, "val", args.cam, img_side=img_side, use_resize=True, use_batch=args.use_batch)
-        val_sampler = DistributedSampler(val_ds)
-        val_dl = DataLoader(dataset=val_ds, batch_size=args.batch_size, sampler=val_sampler, num_workers=num_workers, pin_memory=pin_memory)
-    
-    Logger.info("loading dataset finished")
 
-    return trn_dl, val_dl
+    Logger.info("Loading %s dataset" % (args.benchmark))
+
+    # training set
+    dataset_train = download.load_dataset(
+        args.benchmark,
+        args.datapath,
+        args.thres,
+        "trn",
+        args.cam,
+        img_side=args.img_side,
+        use_resize=True,
+        use_batch=args.use_batch,
+    )
+    sampler_train = DistributedSampler(
+        dataset_train, num_replicas=world_size, rank=rank, shuffle=True
+    )
+    data_loader_train = DataLoader(
+        dataset=dataset_train,
+        batch_size=args.batch_size,
+        sampler=sampler_train,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    )
+
+    # validation set
+    dataset_val = download.load_dataset(
+        args.benchmark,
+        args.datapath,
+        args.thres,
+        "val",
+        args.cam,
+        img_side=args.img_side,
+        use_resize=True,
+        use_batch=args.use_batch,
+    )
+    sampler_val = DistributedSampler(
+        dataset_val, num_replicas=world_size, rank=rank, shuffle=False
+    )
+    data_loader_val = DataLoader(
+        dataset=dataset_val,
+        batch_size=args.batch_size,
+        sampler=sampler_val,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+    )
+
+    Logger.info(
+        f"Data loaded: there are {len(dataset_train)} train images and {len(dataset_val)} val images."
+    )
+
+    return data_loader_train, data_loader_val
+
+
+def build_scheduler(args, optimizer, n_iter_per_epoch, config=None):
+    # modified later
+    num_steps = int(config.TRAIN.EPOCHS * n_iter_per_epoch)
+    warmup_steps = int(config.TRAIN.WARMUP_EPOCHS * n_iter_per_epoch)
+    decay_steps = int(config.TRAIN.LR_SCHEDULER.DECAY_EPOCHS * n_iter_per_epoch)
+    multi_steps = [i * n_iter_per_epoch for i in config.TRAIN.LR_SCHEDULER.MULTISTEPS]
+
+    lr_scheduler = None
+    if args.scheduler == "cycle":
+        lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer, args.lr, epochs=args.epochs, steps_per_epoch=n_iter_per_epoch
+        )
+    elif args.scheduler == "step":
+        lr_scheduler = torch.optim.lr_scheduler.StepLR(
+            optimizer, step_size=args.step_size, gamma=args.step_gamma
+        )
+
+    return lr_scheduler
+
+def build_optimizer(args, model):
+    """
+    Build optimizer, e.g., sgd, adamw.
+    """
+    assert args.optimizer in ["sgd", "adamw"], "Unknown optimizer type"
+    optimizer = None
+
+    # take parameters
+    parameter_group_names = {"params": []}
+    parameter_group_vars = {"params": []}
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        parameter_group_names["params"].append(name)
+        parameter_group_vars["params"].append(param)
+
+    # make optimizers
+    if args.optimizer == "sgd":
+        optimizer = optim.SGD(
+            [parameter_group_vars], lr=args.lr, momentum=args.momentum
+        )
+    elif args.optimizer == "adamw":
+        optimizer = optim.AdamW(
+            [parameter_group_vars], lr=args.lr, weight_decay=args.weight_decay
+        )
+
+    return optimizer
+
+
+def load_checkpoint(args, model, optimizer, lr_scheduler):
+    Logger.info(f">>>>>>>>>> Resuming from {args.resume_path} ..........")
+    checkpoint = torch.load(args.resume_path, map_location="cpu")
+
+    msg = model.load_state_dict(checkpoint["model"], strict=False)
+    Logger.info(msg)
+
+    max_pck = 0.0
+    if (
+        not args.eval_mode
+        and "optimizer" in checkpoint
+        and "lr_scheduler" in checkpoint
+        and "epoch" in checkpoint
+    ):
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
+        args.start_epoch = checkpoint["epoch"] + 1
+
+        Logger.info(
+            f"=> loaded successfully '{args.resume_path}' (epoch {checkpoint['epoch']})"
+        )
+
+        if "max_pck" in checkpoint:
+            max_pck = checkpoint["max_pck"]
+        else:
+            max_pck = 0.0
+
+    del checkpoint
+    torch.cuda.empty_cache()
+
+    # load backbone
+    if args.selfsup in ["dino", "denseCL"]:
+        Logger.info("Loading backbone from %s" % (args.backbone_path))
+        pretrained_backbone = torch.load(args.backbone_path, map_location="cpu")
+        backbone_keys = list(model.backbone.state_dict().keys())
+
+        if "state_dict" in pretrained_backbone:
+            model.load_backbone(pretrained_backbone["state_dict"], strict=False)
+            load_keys = list(pretrained_backbone["state_dict"].keys())
+        else:
+            model.load_backbone(pretrained_backbone)
+            load_keys = list(pretrained_backbone.keys())
+        missing_keys = [i for i in backbone_keys if i not in load_keys]
+        Logger.info("missing keys in loaded backbone: %s" % (missing_keys))
+
+        del pretrained_backbone
+        torch.cuda.empty_cache()
+
+    return max_pck
+
+
+def build_wandb(args, rank):
+    if args.use_wandb and rank == 0:
+        wandb_name = "%.e_%s_%s_%s" % (
+            args.lr,
+            args.loss_stage,
+            args.criterion,
+            args.optimizer,
+        )
+        if args.scheduler != "none":
+            wandb_name += "_%s" % (args.scheduler)
+        if args.optimizer == "sgd":
+            wandb_name = wandb_name + "_m%.2f" % (args.momentum)
+        wandb_name = (
+            wandb_name
+            + "_bsz%d" % (args.batch_size)
+            + "_%s_%s_%s_alp%.2f" % (args.selfsup, args.backbone, args.alpha)
+        )
+
+        _wandb = wandb.init(
+            project=args.wandb_proj,
+            config=args,
+            id=args.run_id,
+            resume="allow",
+            name=wandb_name,
+        )
+
+        wandb.define_metric("iters")
+        wandb.define_metric("running_avg_loss", step_metric="iters")
+        wandb.define_metric("running_avg_pck", step_metric="iters")
+
+        wandb.define_metric("epochs")
+        wandb.define_metric("trn_loss", step_metric="epochs")
+        wandb.define_metric("trn_pck", step_metric="epochs")
+
+        wandb.define_metric("val_loss", step_metric="epochs")
+        wandb.define_metric("val_pck", step_metric="epochs")
+
+        if args.criterion == "weak":
+            wandb.define_metric("disc_grad", step_metric="iters")
+            wandb.define_metric("match_grad", step_metric="iters")
+            wandb.define_metric("discSelf_loss", step_metric="iters")
+            wandb.define_metric("discCross_loss", step_metric="iters")
+            wandb.define_metric("match_loss", step_metric="iters")
+
+def save_checkpoint(args, epoch, model, max_pck, optimizer, lr_scheduler):
+
+    save_state = {'model': model.module.state_dict(),
+                  'optimizer': optimizer.state_dict(),
+                  'max_accuracy': max_pck,
+                  'lr_scheduler': None,
+                  'epoch': epoch,
+                  'args': args}
+    if lr_scheduler is not None:
+        save_state['lr_scheduler'] = lr_scheduler.state_dict()
+
+    save_path = os.path.join(args.logpath, f'ckpt_epoch_{epoch}.pth')
+    Logger.info(f"{save_path} saving......")
+    torch.save(save_state, save_path)
+    Logger.info(f"{save_path} saved !!!")
 
 def main(args):
-    ####    1. init DDP and Logger  ####
+    # ============ 1. Init Logger ... ============
     Logger.initialize(args, training=True)
-
-    if args.distributed:
-        Logger.info('[INFO] turn on distributed train')
-    else:
-        Logger.info('[INFO] turn off distributed train')
+    args.logpath = Logger.logpath
 
     rank = dist.get_rank()
-    local_rank = args.gpu
+    local_rank = args.local_rank
     device = torch.device("cuda:{}".format(local_rank))
     world_size = dist.get_world_size()
-    util.fix_randseed(seed=(0+rank))
 
+    util.fix_randseed(seed=(0 + rank))
+    cudnn.benchmark = True
+    cudnn.deterministic = True
+
+    # ============ 2. Make Dataloader ... ============
+    data_loader_train, data_loader_val = build_dataloader(args, rank, world_size)
+
+    # ============ 3. Model Intialization ... ============
+    assert args.backbone in ["resnet50", "resnet101", "fcn101"], "Unknown backbone"
     n_layers = {"resnet50": 17, "resnet101": 34, "fcn101": 34}
     hyperpixels = list(range(n_layers[args.backbone]))
-
-
-    ####    2. make dataloader  ####
-    trn_dl, val_dl = make_dataloader(args, rank, world_size)
-
-
-    ####    3. Model intialization ####
+    Logger.info(f"Creating model:{args.backbone}/{args.selfsup}")
     model = scot_CAM.SCOT_CAM(
         args.backbone,
         hyperpixels,
@@ -317,142 +821,101 @@ def main(args):
         args.cam,
         args.use_xavier,
         args.weight_thres,
-        args.select_all
-    ).to(device)
+        args.select_all,
+    )
+    model.cuda()
+
+    # freeze the backbone
+    for name, param in model.named_parameters():
+        if "backbone" in name:
+            param.requires_grad = False
+
+    # ============ 4. Optimizer, Scheduler, and Loss ... ============
+    optimizer = build_optimizer(args, model)
+    lr_scheduler = build_scheduler(args, optimizer, len(data_loader_train), config=None)
+    if args.criterion == "weak":
+        criterion = WeakDiscMatchLoss(
+            args.weak_lambda,
+            args.weak_mode,
+            args.alpha,
+            args.temp,
+            args.match_norm_type,
+        )
+    elif args.criterion == "strong_ce":
+        criterion = StrongCrossEntropyLoss(args.alpha)
+    elif args.criterion == "flow":
+        criterion = StrongFlowLoss()
+    else:
+        raise ValueError("Unknown objective loss")
+
+    # ============ 5. Distributed training ... ============
+    model = torch.nn.parallel.DistributedDataParallel(
+        model,
+        device_ids=[args.local_rank],
+        output_device=args.local_rank,
+        find_unused_parameters=False,
+    )
+    model_without_ddp = model.module
+
+    # check # of training params
+    n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    Logger.info(f"number of training params: {n_parameters}")
 
     # resume the model
-    if args.resume and rank == 0:
-        Logger.info('Loading snapshot from %s'%(args.resume_path))
-        model.module.load_state_dict(torch.load(args.resume_path))
+    max_pck = load_checkpoint(args, model_without_ddp, optimizer, lr_scheduler)
 
-    # load backbone 
-    if args.selfsup in ['dino', 'denseCL'] and rank == 0:
-        Logger.info('Loading backbone from %s'%(args.backbone_path))
-        pretrained_backbone = torch.load(args.backbone_path)
-        backbone_keys = list(model.module.backbone.state_dict().keys())
-            
-        if 'state_dict' in pretrained_backbone:
-            model.module.load_backbone(pretrained_backbone['state_dict'])
-            load_keys = list(pretrained_backbone['state_dict'].keys())
-        else:
-            model.module.load_backbone(pretrained_backbone)
-            load_keys = list(pretrained_backbone.keys())
-        missing_keys = [i for i in backbone_keys if i not in load_keys]
-        print(missing_keys)
-
-    if args.distributed:
-        model = DDP(model, device_ids=[args.gpu], output_device=args.gpu, find_unused_parameters=True)
-
-    ####    4. loss function, optimizer and scheduler ####    
-    Objective.initialize(target_rate=0.5, alpha=args.alpha)
-    if args.loss == "weak":
-        loss_func = loss.WeakLoss()
-    elif args.loss == "strong_ce":
-        loss_func = loss.StrongCELoss()
-    elif args.loss == "flow":
-        loss_func = loss.StrongFlowLoss()
-    else:
-        raise ValueError("Unrecognized objective loss")
-
-    assert args.optimizer in ["sgd", "adam"], "Unrecognized model type"
-    if args.optimizer == "sgd":
-        optimizer = optim.SGD(model.module.parameters(), lr=args.lr, momentum=args.momentum)
-    else:
-        optimizer = optim.AdamW(model.module.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-
-    scheduler = None
-    if args.use_scheduler:
-        assert args.scheduler in ["cycle", "step", "cosin"], "Unrecognized model type" 
-        if args.scheduler == "cycle":
-            scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, args.lr, epochs=args.epochs, steps_per_epoch=len(trn_dl))
-        elif args.scheduler == "step":
-            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=args.step_gamma)
-
-    ####    7. Evaluator #### 
+    # ============ 6. Evaluator, Wandb ... ============
     Evaluator.initialize(args.alpha)
+    build_wandb(args, rank)
 
-    ####    8. wandb parameters ####
-    if args.use_wandb and rank == 0:
-        wandb_name = "%.e_%s_%s_%s"%(args.lr, args.loss_stage, args.loss, args.optimizer)
-        if args.use_scheduler:
-            wandb_name += "_%s"%(args.scheduler)
-        if args.optimizer == "sgd":
-            wandb_name = wandb_name + "_m%.2f"%(args.momentum)
-        wandb_name = wandb_name + "_bsz%d"%(args.batch_size) + "_%s_%s_%s_alp%.2f"%(args.selfsup, args.backbone, args.split, args.alpha)
-
-        run = wandb.init(project=args.wandb_proj, config=args, id=args.run_id, resume="allow", name=wandb_name)
-
-        wandb.define_metric("iters")
-        wandb.define_metric("running_avg_loss", step_metric="iters")
-        wandb.define_metric("running_avg_pck", step_metric="iters")
-        
-        wandb.define_metric("epochs")
-        wandb.define_metric("trn_loss", step_metric="epochs")
-        wandb.define_metric("trn_pck", step_metric="epochs")
-        
-        wandb.define_metric("val_loss", step_metric="epochs")
-        wandb.define_metric("val_pck", step_metric="epochs")
-
-        if args.loss == 'weak':
-            wandb.define_metric("disc_grad", step_metric="iters")
-            wandb.define_metric("match_grad", step_metric="iters")
-            wandb.define_metric("discSelf_loss", step_metric="iters")
-            wandb.define_metric("discCross_loss", step_metric="iters")
-            wandb.define_metric("match_loss", step_metric="iters")
-        
-    ####    9. Train SCOT  ####
-    best_val_pck = float("-inf")
+    # ============ 7. Start training ... ============
     log_benchmark = {}
-     
-    Logger.info("Training Start")
-    train_started = time.time()
-            
+    Logger.info("Start training")
+    start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
+        data_loader_train.sampler.set_epoch(epoch)
 
-        # training
-        trn_loss, trn_pck = train(epoch, model, trn_dl, loss_func, optimizer, args, device, 'train')
+        # train
+        trn_loss, trn_pck = train_one_epoch(
+            args, model, criterion, data_loader_train, optimizer, epoch, lr_scheduler
+        )
         log_benchmark["trn_loss"] = trn_loss
         log_benchmark["trn_pck"] = trn_pck
 
         # validation
-        if args.split not in ["val", "trnval"]:
-            with torch.no_grad():
-                val_loss, val_pck = train(epoch, model, val_dl, loss_func, optimizer, args, device, 'eval')
-                log_benchmark["val_loss"] = val_loss
-                log_benchmark["val_pck"] = val_pck
-                
-        if args.use_scheduler:
-                # lrs.append(utils.get_lr(optimizer))
-                scheduler.step() # update lr batch-by-batch
-                log_benchmark["lr"] = scheduler.get_last_lr()[0]
+        val_loss, val_pck = validate(
+            args, model, criterion, data_loader_val
+        )
+        log_benchmark["val_loss"] = val_loss
+        log_benchmark["val_pck"] = val_pck
 
-        # save the best model
-        if args.split in ['old_trn', 'trn']:
-            model_pck = val_pck
-        else:
-            model_pck = trn_pck
-            
         # save_e = 1 if args.split == "trnval" else 5
         # if (epoch%save_e)==0:
         #     Logger.save_epoch(model, epoch, model_pck["votes_geo"])
-            
-        if model_pck > best_val_pck and rank == 0:
-            Logger.save_model(model.module, epoch, model_pck, best_val_pck)
-            best_val_pck = model_pck
+
+        # save model and log results
+        if val_pck > max_pck and rank == 0:
+            # Logger.save_model(model.module, epoch, val_pck, max_pck)
+            save_checkpoint(args, epoch, model, max_pck, optimizer, lr_scheduler)
+            Logger.info('Best Model saved @%d w/ val. PCK: %5.4f -> %5.4f on [%s]\n' % (epoch, max_pck, val_pck, os.path.join(args.logpath, f'ckpt_epoch_{epoch}.pth')))
+            max_pck = val_pck
 
         if args.use_wandb and rank == 0:
-            wandb.log({'epochs':epoch})
+            wandb.log({"epochs": epoch})
             wandb.log(log_benchmark)
 
         if rank == 0:
-            time_message = 'Training %d epochs took:%4.3f\n' % (epoch+1, (time.time()-train_started)/60) + ' minutes'
+            time_message = (
+                "Training %d epochs took:%4.3f\n"
+                % (epoch + 1, (time.time() - start_time) / 60)
+                + " minutes"
+            )
             Logger.info(time_message)
-    
 
     Logger.info("==================== Finished training ====================")
-    
-if __name__ == "__main__":
 
+
+if __name__ == "__main__":
     # Arguments parsing
     # fmt: off
     parser = argparse.ArgumentParser(description="SCOT Training Script")
@@ -465,20 +928,19 @@ if __name__ == "__main__":
     parser.add_argument('--thres', type=str, default='auto', choices=['auto', 'img', 'bbox'])
     parser.add_argument('--alpha', type=float, default=0.1)
     parser.add_argument('--logpath', type=str, default='')
-    parser.add_argument('--split', type=str, default='trn', help='trn, val, test, old_trn, trn_val') 
+    # parser.add_argument('--split', type=str, default='trn', help='trn, val, test, old_trn, trn_val') 
 
     # Training parameters
-    parser.add_argument('--loss', type=str, default='strong_ce', choices=['weak', 'strong_ce', 'flow'])
+    parser.add_argument('--criterion', type=str, default='strong_ce', choices=['weak', 'strong_ce', 'flow'])
     parser.add_argument('--lr', type=float, default=0.01) 
     parser.add_argument('--lr_backbone', type=float, default=0.0) 
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--start_epoch', type=int, default=0)
     parser.add_argument('--batch_size', type=int, default=4)
-    parser.add_argument('--optimizer', type=str, default="sgd", choices=["sgd", "adam"])
+    parser.add_argument('--optimizer', type=str, default="sgd", choices=["sgd", "adamw"])
     parser.add_argument('--weight_decay', type=float, default=0.00, help='weight decay (default: 0.00)')
     parser.add_argument('--momentum', type=float, default=0.9, help='momentum (default: 0.9)')
-    parser.add_argument("--use_scheduler", type=util.boolean_string, nargs="?", default=False)
-    parser.add_argument("--scheduler", type=str, default="cycle", choices=["step", "cycle", "cosine"])
+    parser.add_argument("--scheduler", type=str, default="cycle", choices=['none', 'step', 'cycle', 'cosine'])
     parser.add_argument('--step_size', type=int, default=16, help='hyperparameters for step scheduler')
     parser.add_argument('--step_gamma', type=float, default=0.1, help='hyperparameters for step scheduler')
     
@@ -494,9 +956,6 @@ if __name__ == "__main__":
     parser.add_argument('--select_all', type=float, default=1.01, help='selec all probability (default: 1.0)')
     
     parser.add_argument('--img_side', type=str, default='(300)')
-    parser.add_argument("--use_batch", type= utils.boolean_string, nargs="?", default=False)
-    parser.add_argument("--trg_cen", type= utils.boolean_string, nargs="?", default=False)
-    parser.add_argument("--use_scot2", type= utils.boolean_string, nargs="?", default=False)
 
     # Algorithm parameters
     parser.add_argument('--sim', type=str, default='OTGeo', help='Similarity type: OT, OTGeo, cos, cosGeo')
@@ -509,14 +968,20 @@ if __name__ == "__main__":
 
     parser.add_argument('--run_id', type=str, default='', help='run_id')
     parser.add_argument('--wandb_proj', type=str, default='', help='wandb project name')
-    parser.add_argument("--weak_norm", type=str, default="l1", choices=["l1", "linear", "softmax"])
-    parser.add_argument('--weak_lambda', type=float, default=0.5, help='lambda for weak loss (default: 0.5)')
-    parser.add_argument('--temp', type=float, default=0.05, help='lambda for weak loss (default: 0.5)')
+
+
+    parser.add_argument("--match_norm_type", type=str, default="l1", choices=["l1", "linear", "softmax"])
+    parser.add_argument('--weak_lambda', type=str, default='[1.0, 1.0, 1.0]')
+    parser.add_argument('--weak_mode', default='custom_lambda', choices=['grad_norm', 'custom_lambda'])
+    parser.add_argument('--temp', type=float, default=0.05, help='softmax-temp for match loss')
 
     # Arguments for distributed data parallel
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
     parser.add_argument('--world_size', default=1, type=int, help='numer of distributed processes')
     parser.add_argument("--local_rank", required=True, type=int, help='local rank for DistributedDataParallel')
+
+    parser.add_argument("--eval_mode", type= utils.boolean_string, nargs="?", default=False)
+    
 
     args = parser.parse_args()
     
@@ -525,13 +990,15 @@ if __name__ == "__main__":
 
     if args.use_wandb and args.run_id == '':
         args.run_id = wandb.util.generate_id()
-    img_side = util.parse_string(args.img_side)
-    if isinstance(img_side, int):
+    args.img_side = util.parse_string(args.img_side)
+    if isinstance(args.img_side, int):
         # use target rhf center if only scale the max_side
         args.trg_cen = True
         args.use_batch = False
     else:
         args.trg_cen = False
         args.use_batch = True
+
+    args.weak_lambda = torch.FloatTensor(list(map(float, re.findall(r"[-+]?(?:\d*\.*\d+)", args.weak_lambda)))).cuda()
 
     main(args)
