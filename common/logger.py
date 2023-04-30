@@ -39,7 +39,7 @@ class Logger:
 
         logging.basicConfig(filemode=filemode,
                             filename=os.path.join(cls.logpath, 'log.txt'),
-                            level=logging.INFO,
+                            level=logging.INFO if dist.get_rank()==0 else logging.WARN,
                             format='%(message)s',
                             datefmt='%m-%d %H:%M:%S')
         # if dist.get_rank()==0 else logging.WARN

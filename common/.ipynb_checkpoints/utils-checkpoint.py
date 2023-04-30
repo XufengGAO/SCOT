@@ -6,6 +6,37 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from PIL import Image
 import os
+from enum import Enum
+from torch import distributed as dist
+from .logger import Logger
+import re
+
+def find_knn(db_vectors, qr_vectors):
+    r"""Finds K-nearest neighbors (Euclidean distance)"""
+    # print("knn", db_vectors.unsqueeze(1).size(), qr_vectors.size())
+    # print("knn", db_vectors[-3])
+    # (3600, 40, 2), repeated centers for each rep field of each hyperpixel
+    db = db_vectors.unsqueeze(1).repeat(1, qr_vectors.size(0), 1)
+
+    # (3600, 40, 2), repeated 40 keypoints
+    qr = qr_vectors.unsqueeze(0).repeat(db_vectors.size(0), 1, 1)
+    dist = (db - qr).pow(2).sum(2).pow(0.5).t() # (40, 3600)
+    # keypoint to each center
+    # print("dist", dist.size())
+    _, nearest_idx = dist.min(dim=1) #  hyperpixel idx for each keypoint
+    # print("nea_idx", nearest_idx.size())
+    return nearest_idx
+
+def match_idx(kpss, n_ptss, rf_center):
+    r"""Samples the nearst feature (receptive field) indices"""
+    max_pts = 40
+    batch = len(kpss)
+    nearest_idxs = torch.zeros((batch, max_pts), dtype=torch.int32).to(rf_center.device)
+    for idx, (kps, n_pts) in enumerate(zip(kpss, n_ptss)):
+        nearest_idx = find_knn(rf_center, kps[:,:n_pts].t())
+        nearest_idxs[idx, :n_pts] = nearest_idx
+
+    return nearest_idxs
 
 def fix_randseed(seed):
     r"""Fixes random seed for reproducibility"""
@@ -17,11 +48,9 @@ def fix_randseed(seed):
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
 
-
 def mean(x):
     r"""Computes average of a list"""
     return sum(x) / len(x) if len(x) > 0 else 0.0
-
 
 def where(predicate):
     r"""Predicate must be a condition on nd-tensor"""
@@ -30,12 +59,10 @@ def where(predicate):
         matching_indices = matching_indices.t().squeeze(0)
     return matching_indices
 
-
 def boolean_string(s):
     if s not in {"False", "True"}:
         raise ValueError("Not a valid boolean string")
     return s == "True"
-
 
 def convert_weight_map(weight):
 
@@ -206,3 +233,99 @@ def draw_matches_on_image(epoch, step, match_idx, match_pck, src_img, trg_img, b
 def get_lr(optimizer):
     for param_group in optimizer.param_groups:
         return param_group['lr']
+    
+def parse_string(string):
+    r"""Parse given hyperpixel list (string -> int)"""
+    string = list(map(int, re.findall(r'\d+', string)))
+    if len(string) == 2:
+        string = tuple(string)
+    else:
+        string = int(string[0])
+        
+    return string
+
+def fix_randseed(seed):
+    r"""Fixes random seed for reproducibility"""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+class Summary(Enum):
+    NONE = 0
+    AVERAGE = 1
+    SUM = 2
+    COUNT = 3
+
+class NewAverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self, name, fmt=':f', summary_type=Summary.AVERAGE):
+        self.name = name
+        self.fmt = fmt
+        self.summary_type = summary_type
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+    def all_reduce(self):
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        else:
+            device = torch.device("cpu")
+        total = torch.tensor([self.sum, self.count], dtype=torch.float32, device=device)
+        dist.all_reduce(total, dist.ReduceOp.SUM, async_op=False)
+        self.sum, self.count = total.tolist()
+        self.avg = self.sum / self.count
+
+    def __str__(self):
+        fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
+        return fmtstr.format(**self.__dict__)
+
+    def summary(self):
+        fmtstr = ''
+        if self.summary_type is Summary.NONE:
+            fmtstr = ''
+        elif self.summary_type is Summary.AVERAGE:
+            fmtstr = '{name} {avg:.3f}'
+        elif self.summary_type is Summary.SUM:
+            fmtstr = '{name} {sum:.3f}'
+        elif self.summary_type is Summary.COUNT:
+            fmtstr = '{name} {count:.3f}'
+        else:
+            raise ValueError('invalid summary type %r' % self.summary_type)
+        
+        return fmtstr.format(**self.__dict__)
+
+class ProgressMeter(object):
+    def __init__(self, num_batches, meters, prefix=""):
+        self.batch_fmtstr = self._get_batch_fmtstr(num_batches)
+        self.meters = meters
+        self.prefix = prefix
+
+    def display(self, batch):
+        entries = [self.prefix + self.batch_fmtstr.format(batch)]
+        entries += [str(meter) for meter in self.meters]
+        # print('\t'.join(entries))
+        Logger.info('\t'.join(entries))
+        
+    def display_summary(self):
+        entries = [self.prefix]
+        entries += [meter.summary() for meter in self.meters]
+        # print(' '.join(entries))
+        Logger.info('\t'.join(entries))
+
+    def _get_batch_fmtstr(self, num_batches):
+        num_digits = len(str(num_batches // 1))
+        fmt = '{:' + str(num_digits) + 'd}'
+        return '[' + fmt + '/' + fmt.format(num_batches) + ']'

@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 import torch
 import time
 from PIL import Image
-from data.download import download_dataset
+from data.download import load_dataset
 from model import scot_CAM, geometry
 from common.loss import StrongCrossEntropyLoss, StrongFlowLoss, WeakDiscMatchLoss
 from common.utils import match_idx, mean, draw_weight_map, boolean_string, fix_randseed, parse_string, NewAverageMeter, ProgressMeter, Summary
@@ -468,14 +468,10 @@ def validate(args, model, criterion, dataloader, epoch, aux_val_loader=None):
                 dist.barrier()
                 del batch_pck
 
-                # 5. print running pck, loss
-                if (step % 20 == 0) and dist.get_rank() == 0:
-                    progress.display(step+1)
-
             del src, trg
             torch.cuda.empty_cache()
 
-    loss_meter = NewAverageMeter('loss', ':4.2f', Summary.NONE)
+    loss_meter = NewAverageMeter('loss', ':4.2f')
     pck_meter = NewAverageMeter('pck', ':4.2f')
     progress_list = [loss_meter, pck_meter]
     if args.criterion == "weak":
@@ -555,7 +551,7 @@ def build_dataloader(args, rank, world_size):
     Logger.info("Loading %s dataset" % (args.benchmark))
 
     # training set
-    train_dataset = download_dataset(
+    train_dataset = load_dataset(
         args.benchmark,
         args.datapath,
         args.thres,
@@ -573,7 +569,7 @@ def build_dataloader(args, rank, world_size):
         num_workers=num_workers, pin_memory=pin_memory, sampler=train_sampler)
 
     # validation set
-    val_dataset = download_dataset(
+    val_dataset = load_dataset(
         args.benchmark,
         args.datapath,
         args.thres,
@@ -594,12 +590,11 @@ def build_dataloader(args, rank, world_size):
     Logger.info(
         f"Data loaded: there are {len(train_loader.dataset)} train images and {len(val_loader.dataset)} val images."
     )
-
     if len(val_loader.sampler) * world_size < len(val_loader.dataset):
         aux_val_dataset = Subset(val_loader.dataset, range(len(val_loader.sampler)*world_size, len(val_loader.dataset)))
         aux_val_loader = DataLoader(aux_val_dataset, batch_size=args.batch_size, shuffle=False,num_workers=num_workers, pin_memory=pin_memory)
 
-        print('Create Subset: ', len(val_loader.sampler),  world_size, len(val_loader.dataset))
+        Logger.info('Create Subset: ', len(val_loader.sampler),  world_size, len(val_loader.dataset))
     else:
         aux_val_loader = None
     return train_loader, val_loader, aux_val_loader
@@ -777,11 +772,12 @@ def main(args):
     fix_randseed(seed=(0))
     cudnn.benchmark = False
     cudnn.deterministic = True
-    warnings.warn('You have chosen to seed training. '
-                        'This will turn on the CUDNN deterministic setting, '
-                        'which can slow down your training considerably! '
-                        'You may see unexpected behavior when restarting '
-                        'from checkpoints.')
+    if rank == 0:
+        warnings.warn('You have chosen to seed training. '
+                            'This will turn on the CUDNN deterministic setting, '
+                            'which can slow down your training considerably! '
+                            'You may see unexpected behavior when restarting '
+                            'from checkpoints.\n')
     
     # ============ 2. Make Dataloader ... ============
     train_loader, val_loader, aux_val_loader = build_dataloader(args, rank, world_size)
@@ -860,7 +856,7 @@ def main(args):
         log_benchmark["trn_loss"] = trn_loss
         log_benchmark["trn_pck"] = trn_pck
         end_train_time = (time.time()-start_time)/60
-        print(epoch, model.module.learner.layerweight.detach().clone().view(-1))
+        # print(epoch, model.module.learner.layerweight.detach().clone().view(-1))
 
         # validation
         start_time = time.time()

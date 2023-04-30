@@ -8,7 +8,8 @@ from PIL import Image
 import os
 from enum import Enum
 from torch import distributed as dist
-from logger import Logger
+from .logger import Logger
+import re
 
 def find_knn(db_vectors, qr_vectors):
     r"""Finds K-nearest neighbors (Euclidean distance)"""
@@ -319,7 +320,7 @@ class ProgressMeter(object):
         Logger.info('\t'.join(entries))
         
     def display_summary(self):
-        entries = [" *"]
+        entries = [self.prefix]
         entries += [meter.summary() for meter in self.meters]
         # print(' '.join(entries))
         Logger.info('\t'.join(entries))

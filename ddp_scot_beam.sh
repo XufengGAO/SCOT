@@ -4,7 +4,7 @@
 benchmark="pfpascal"
 backbone="resnet50"
 nnodes=4
-master_addr="10.233.80.191"
+master_addr="10.233.87.67"
 master_port=12361
 
 # CUDA_VISIBLE_DEVICES=0 \
@@ -23,7 +23,7 @@ python3 -m torch.distributed.launch --master_port=${master_port} --nproc_per_nod
                                     --lr 0.003 \
                                     --momentum 0.99 \
                                     --epochs 50 \
-                                    --batch_size 15 \
+                                    --batch_size 16 \
                                     --optimizer 'sgd' \
                                     --exp1 1.0 \
                                     --exp2 0.5 \
