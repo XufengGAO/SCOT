@@ -22,46 +22,26 @@ import re
 import torch.backends.cudnn as cudnn
 from torch.utils.data import Subset
 import warnings
-
+import numpy as np
 # DDP package
 from torch.utils.data.distributed import DistributedSampler
 import tempfile
 from torch import distributed as dist
 from collections import OrderedDict
-
+import gc
 wandb.login()
-
-
-def reduce_results(results):
-    """Coalesced mean all reduce over a dictionary of 0-dimensional tensors"""
-    names, values = [], []
-    for k, v in results.items():
-        names.append(k)
-        values.append(v)
-
-    # Peform the actual coalesced all_reduce
-    values = torch.stack([torch.tensor(v) for v in values], dim=0).cuda()
-    dist.all_reduce(values, dist.ReduceOp.SUM)
-    values.div_(dist.get_world_size())
-    values = torch.chunk(values, values.size(0), dim=0)
-
-    # Reconstruct the dictionary
-    return OrderedDict((k, v.item()) for k, v in zip(names, values))
-
-def reduce_tensor(tensor):
-    rt = tensor.clone()
-    dist.all_reduce(rt, op=dist.ReduceOp.SUM)
-    rt /= dist.get_world_size()
-    return rt
 
 
 def train(args, model, criterion, dataloader, optimizer, epoch):
     # Logger.info(f'Current learning rate for different parameter groups: {[it["lr"] for it in optimizer.param_groups]}')
     # average_meter = AverageMeter(args.benchmark, dataloader.dataset.cls)
 
+    progress_list = []
     loss_meter = NewAverageMeter('loss', ':4.2f')
+    progress_list.append(loss_meter)
     pck_meter = NewAverageMeter('pck', ':4.2f')
-    progress_list = [loss_meter, pck_meter]
+    progress_list.append(pck_meter)
+
     if args.criterion == "weak":
         discSelf_meter = NewAverageMeter('discSelf_loss', ':4.2f')
         discCross_meter = NewAverageMeter('discCross_loss', ':4.2f') 
@@ -75,8 +55,10 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
 
     total_steps = len(dataloader)
 
+    Pointtime = {'Point-1':0, 'Point-2':0,'Point-3':0,'Point-4':0,'Point-5':0,'Point-6':0,}
     for step, data in enumerate(dataloader):
         # move data to the same device as model
+        
         data["src_img"] = data["src_img"].cuda(non_blocking=True)
         data["trg_img"] = data["trg_img"].cuda(non_blocking=True)
         data["src_kps"] = data["src_kps"].cuda(non_blocking=True)
@@ -90,6 +72,7 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             data["src_mask"], data["trg_mask"] = None, None
         bsz = data["src_img"].size(0)
 
+        start_time = time.time()
         # 1. compute output
         src, trg = model(
             data["src_img"],
@@ -100,6 +83,7 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             args.backbone,
             'train',
         )
+        Pointtime['Point-2'] += ((time.time()-start_time)/60)
 
         # {'box', 'feats', 'imsize', 'weights'}
         # 2. calculate sim
@@ -156,7 +140,9 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
                 trg_sim = model.module.calculate_votesGeo(
                     trg_sim, trg["imsize"], trg["imsize"], trg["box"], trg["box"]
                 )
+        Pointtime['Point-3'] += ((time.time()-start_time)/60)
 
+        start_time = time.time()
         # 3. calculate loss
         src_center = 0
         trg_center = 0
@@ -188,7 +174,7 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
         elif args.criterion == "flow":
             pass
         elif args.criterion == "weak":
-            loss, discSelf_loss, discCross_loss, match_loss = criterion(
+            task_loss = criterion(
                 cross_sim,
                 src_sim,
                 trg_sim,
@@ -196,23 +182,34 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
                 trg["feats"],
             )
 
-            discSelf_meter.update(discSelf_loss.item(), bsz)
-            discCross_meter.update(discCross_loss.item(), bsz)
-            match_meter.update(match_loss.item(), bsz)
+            discSelf_meter.update(task_loss[0].item(), bsz)
+            discCross_meter.update(task_loss[1].item(), bsz)
+            match_meter.update(task_loss[2].item(), bsz)
+
+            print(task_loss.size())
+
+            # go through the GradNorm module
+            if args.criterion == 'weak' and args.weak_mode == 'grad_norm':
+                loss = model.module.gradNorm(task_loss)
+            else:
+                loss = args.weak_lambda * task_loss
 
             del src_sim, trg_sim
-            # TODO, gradNorm
 
         loss_meter.update(loss.item(), bsz)
 
         # back propagation
-        optimizer.zero_grad()      
-        loss.backward()
-        if args.use_grad_clip:
-            torch.nn.utils.clip_grad.clip_grad_value_(
-                model.parameters(), args.grad_clip
-            )
-        optimizer.step()
+        optimizer.zero_grad()   
+        print('step %d, loss %.4f'%(step, loss.item())) 
+        if args.criterion == 'weak' and args.weak_mode == 'grad_norm':
+            model.module.gradNorm.additional_forward_and_backward(model.module.learner, optimizer)
+        else:
+            loss.backward()
+            if args.use_grad_clip:
+                torch.nn.utils.clip_grad.clip_grad_value_(
+                    model.parameters(), args.grad_clip
+                )
+            optimizer.step()
         del loss, cross_sim
 
         # 4. collect results
@@ -258,28 +255,23 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
         if (step % 20 == 0) and dist.get_rank() == 0:
             progress.display(step+1)
 
-        # 6. draw weight map
-        if (step % 40 == 0) and dist.get_rank() == 0:
-            # 1. Draw weight map
-            weight_map_path = os.path.join(Logger.logpath, "weight_map")
-            os.makedirs(weight_map_path, exist_ok=True)
-            weight_pth = draw_weight_map(
-                model.module.learner.layerweight.detach().clone().view(-1),
-                epoch, step, weight_map_path)
-            if args.use_wandb:
-                wandb.log({"weight_map": wandb.Image(Image.open(weight_pth).convert("RGB"))})
-
         # 7. collect gradients
         if args.criterion == "weak":
+            dist.barrier()
             discSelf_meter.all_reduce()
             discCross_meter.all_reduce
             match_meter.all_reduce
             if args.use_wandb and dist.get_rank() == 0:
                 wandb.log({"discSelf_loss": discSelf_meter.avg, "discCross_loss": discCross_meter.avg,
                         "match_loss": match_meter.avg,})
+                if args.weak_mode == 'grad_norm':
+                    wandb.log({"discSelf_w": model.module.gradNorm.data[0].item(), "discCross_w": model.module.gradNorm.data[1].item(),
+                            "match_w": model.module.gradNorm.data[2].item(),})
 
-        del src, trg
-        torch.cuda.empty_cache()
+
+        del src, trg, data
+        gc.collect()
+    torch.cuda.empty_cache()
 
     # Draw class pck
     # if False and (epoch % 2)==0:
@@ -295,9 +287,22 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
     #             }
     #         )
 
+    # 6. draw weight map
+    if dist.get_rank() == 0:
+        # 1. Draw weight map
+        weight_map_path = os.path.join(Logger.logpath, "weight_map")
+        os.makedirs(weight_map_path, exist_ok=True)
+        weight_pth = draw_weight_map(
+            model.module.learner.layerweight.detach().clone().view(-1),
+            epoch, step, weight_map_path)
+        if args.use_wandb:
+            wandb.log({"weight_map": wandb.Image(Image.open(weight_pth).convert("RGB"))})
+
+
     # 3. log epoch loss, epoch pck
     loss_meter.all_reduce()
-    pck_meter.all_reduce()
+    pck_meter.all_reduce() 
+
     
     return loss_meter.avg, pck_meter.avg
 
@@ -543,7 +548,6 @@ def init_distributed_mode(args):
     )
     dist.barrier()
 
-
 def build_dataloader(args, rank, world_size):
     num_workers = 16 if torch.cuda.is_available() else 8
     pin_memory = True if torch.cuda.is_available() else False
@@ -599,7 +603,6 @@ def build_dataloader(args, rank, world_size):
         aux_val_loader = None
     return train_loader, val_loader, aux_val_loader
 
-
 def build_scheduler(args, optimizer, n_iter_per_epoch, config=None):
     # modified later
     # num_steps = int(config.TRAIN.EPOCHS * n_iter_per_epoch)
@@ -646,7 +649,6 @@ def build_optimizer(args, model):
         )
 
     return optimizer
-
 
 def load_checkpoint(args, model, optimizer, lr_scheduler):
     Logger.info(f">>>>>>>>>> Resuming from {args.resume} ..........")
@@ -698,7 +700,6 @@ def load_checkpoint(args, model, optimizer, lr_scheduler):
 
     return max_pck
 
-
 def build_wandb(args, rank):
     if args.use_wandb and rank == 0:
         wandb_name = "%.e_%s_%s_%s" % (
@@ -711,11 +712,13 @@ def build_wandb(args, rank):
             wandb_name += "_%s" % (args.scheduler)
         if args.optimizer == "sgd":
             wandb_name = wandb_name + "_m%.2f" % (args.momentum)
-        wandb_name = (
-            wandb_name
-            + "_bsz%d" % (args.batch_size)
-            + "_%s_%s_alp%.2f" % (args.selfsup, args.backbone, args.alpha)
-        )
+        wandb_name += "_bsz%d" % (args.batch_size)
+
+        if args.criterion == 'weak':
+            if args.weak_mode == 'custom_lambda':
+                wandb_name += ("_%s"%(args.weak_lambda))
+            else:
+                wandb_name += ("_%.2f"%(args.weak_alpha))
 
         _wandb = wandb.init(
             project=args.wandb_proj,
@@ -742,6 +745,11 @@ def build_wandb(args, rank):
             wandb.define_metric("discSelf_loss", step_metric="iters")
             wandb.define_metric("discCross_loss", step_metric="iters")
             wandb.define_metric("match_loss", step_metric="iters")
+
+            if args.args.weak_mode == 'grad_norm':
+                wandb.define_metric("discSelf_w", step_metric="iters")
+                wandb.define_metric("discCross_w", step_metric="iters")
+                wandb.define_metric("match_w", step_metric="iters")
 
 def save_checkpoint(args, epoch, model, max_pck, optimizer, lr_scheduler):
 
@@ -784,18 +792,10 @@ def main(args):
 
     # ============ 3. Model Intialization ... ============
     assert args.backbone in ["resnet50", "resnet101", "fcn101"], "Unknown backbone"
+    Logger.info(f">>>>>>>>>> Creating model:{args.backbone} + {args.selfsup} <<<<<<<<<<")
     n_layers = {"resnet50": 17, "resnet101": 34, "fcn101": 34}
     hyperpixels = list(range(n_layers[args.backbone]))
-    Logger.info(f">>>>>>>>>> Creating model:{args.backbone}/{args.selfsup}")
-    model = scot_CAM.SCOT_CAM(
-        args.backbone,
-        hyperpixels,
-        args.benchmark,
-        args.cam,
-        args.use_xavier,
-        args.weight_thres,
-        args.select_all,
-    )
+    model = scot_CAM.SCOT_CAM(args, hyperpixels)
     model.cuda()
 
     # freeze the backbone
@@ -807,13 +807,7 @@ def main(args):
     optimizer = build_optimizer(args, model)
     lr_scheduler = build_scheduler(args, optimizer, len(train_loader), config=None)
     if args.criterion == "weak":
-        criterion = WeakDiscMatchLoss(
-            args.weak_lambda,
-            args.weak_mode,
-            args.alpha,
-            args.temp,
-            args.match_norm_type,
-        )
+        criterion = WeakDiscMatchLoss(args.temp, args.match_norm_type)
     elif args.criterion == "strong_ce":
         criterion = StrongCrossEntropyLoss(args.alpha)
     elif args.criterion == "flow":
@@ -846,7 +840,8 @@ def main(args):
     # ============ 7. Start training ... ============
     log_benchmark = {}
     Logger.info(">>>>>>>>>> Start training")
-    
+
+    args.weak_lambda = torch.FloatTensor(list(map(float, re.findall(r"[-+]?(?:\d*\.*\d+)", args.weak_lambda)))).cuda()
     for epoch in range(args.start_epoch, args.epochs):
         train_loader.sampler.set_epoch(epoch)
 
@@ -865,8 +860,6 @@ def main(args):
         )
         log_benchmark["val_loss"] = val_loss
         log_benchmark["val_pck"] = val_pck
-
-
         end_val_time = (time.time()-start_time)/60
         
         # save_e = 1 if args.split == "trnval" else 5
@@ -885,7 +878,7 @@ def main(args):
             wandb.log(log_benchmark)
             
         time_message = (
-            ">>>>>>>>>> Train/Eval %d epochs took:%4.3f/%4.3f"%(epoch + 1, end_train_time, end_val_time)+" minutes"
+            ">>>>>>>>>> Train/Eval %d epochs took:%4.3f + %4.3f = %4.3f"%(epoch + 1, end_train_time, end_val_time, end_train_time+end_val_time)+" minutes"
         )
         Logger.info(time_message)
 
@@ -950,13 +943,15 @@ if __name__ == "__main__":
     parser.add_argument('--weak_lambda', type=str, default='[1.0, 1.0, 1.0]')
     parser.add_argument('--weak_mode', default='custom_lambda', choices=['grad_norm', 'custom_lambda'])
     parser.add_argument('--temp', type=float, default=0.05, help='softmax-temp for match loss')
+    parser.add_argument('--weak_alpha', type=float, default=0.12)
+
 
     # Arguments for distributed data parallel
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
     parser.add_argument('--world_size', default=1, type=int, help='numer of distributed processes')
     parser.add_argument("--local_rank", required=True, type=int, help='local rank for DistributedDataParallel')
     parser.add_argument('--dist_backend', default='nccl', type=str, help='distributed backend')
-    parser.add_argument("--eval_mode", type= boolean_string, nargs="?", default=False)
+    parser.add_argument("--eval_mode", type= boolean_string, nargs="?", default=False, help='train or test model')
     
 
     args = parser.parse_args()
@@ -974,7 +969,5 @@ if __name__ == "__main__":
     else:
         args.trg_cen = False
         args.use_batch = True
-
-    args.weak_lambda = torch.FloatTensor(list(map(float, re.findall(r"[-+]?(?:\d*\.*\d+)", args.weak_lambda)))).cuda()
 
     main(args)
