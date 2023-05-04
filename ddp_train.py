@@ -253,11 +253,14 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             del votes, votes_geo, eval_result
 
             pck_meter.update(batch_pck, bsz)
-            dist.barrier()
+ 
             del batch_pck
 
         if args.use_wandb and dist.get_rank() == 0:
             wandb.log({"iters": step + epoch * total_steps})
+            if args.criterion == "weak" and args.weak_mode == 'grad_norm':
+                    wandb.log({"discSelf_w": model.module.gradNorm.data[0].item(), "discCross_w": model.module.gradNorm.data[1].item(),
+                            "match_w": model.module.gradNorm.data[2].item(),})
 
         # 5. print running pck, loss
         if (step % 50 == 0) and dist.get_rank() == 0:
@@ -272,10 +275,6 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             if args.use_wandb and dist.get_rank() == 0:
                 wandb.log({"discSelf_loss": discSelf_meter.avg, "discCross_loss": discCross_meter.avg,
                         "match_loss": match_meter.avg,})
-                if args.weak_mode == 'grad_norm':
-                    wandb.log({"discSelf_w": model.module.gradNorm.data[0].item(), "discCross_w": model.module.gradNorm.data[1].item(),
-                            "match_w": model.module.gradNorm.data[2].item(),})
-
 
         del src, trg, data
         # gc.collect()
@@ -306,7 +305,7 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
         if args.use_wandb:
             wandb.log({"weight_map": wandb.Image(Image.open(weight_pth).convert("RGB"))})
 
-
+    dist.barrier()
     # 3. log epoch loss, epoch pck
     loss_meter.all_reduce()
     pck_meter.all_reduce() 
@@ -430,7 +429,7 @@ def validate(args, model, criterion, dataloader, epoch, aux_val_loader=None):
                 elif args.criterion == "flow":
                     pass
                 elif args.criterion == "weak":
-                    loss, discSelf_loss, discCross_loss, match_loss = criterion(
+                    task_loss = criterion(
                         cross_sim,
                         src_sim,
                         trg_sim,
@@ -438,13 +437,16 @@ def validate(args, model, criterion, dataloader, epoch, aux_val_loader=None):
                         trg["feats"],
                     )
 
-                    discSelf_meter.update(discSelf_loss.item(), bsz)
-                    discCross_meter.update(discCross_loss.item(), bsz)
-                    match_meter.update(match_loss.item(), bsz)
+                    # discSelf_meter.update(task_loss[0].item(), bsz)
+                    # discCross_meter.update(task_loss[1].item(), bsz)
+                    # match_meter.update(task_loss[2].item(), bsz)
+
+                    loss = (model.module.gradNorm.w.data * task_loss).sum()
 
                     del src_sim, trg_sim
 
                 loss_meter.update(loss.item(), bsz)
+                del loss
 
                 # 4. collect results
                 batch_pck = 0
@@ -478,8 +480,8 @@ def validate(args, model, criterion, dataloader, epoch, aux_val_loader=None):
                 del votes, votes_geo, eval_result
 
                 pck_meter.update(batch_pck, bsz)
-                dist.barrier()
-                del batch_pck
+   
+                del batch_pck, data
 
             del src, trg
             torch.cuda.empty_cache()
@@ -487,14 +489,14 @@ def validate(args, model, criterion, dataloader, epoch, aux_val_loader=None):
     loss_meter = NewAverageMeter('loss', ':4.2f')
     pck_meter = NewAverageMeter('pck', ':4.2f')
     progress_list = [loss_meter, pck_meter]
-    if args.criterion == "weak":
-        discSelf_meter = NewAverageMeter('discSelf_loss', ':4.2f')
-        discCross_meter = NewAverageMeter('discCross_loss', ':4.2f') 
-        match_meter = NewAverageMeter('match_loss', ':4.2f') 
-        progress_list.append(discSelf_meter, discCross_meter, match_meter)
+    # if args.criterion == "weak":
+    #     discSelf_meter = NewAverageMeter('discSelf_loss', ':4.2f')
+    #     discCross_meter = NewAverageMeter('discCross_loss', ':4.2f') 
+    #     match_meter = NewAverageMeter('match_loss', ':4.2f') 
+    #     progress_list.append(discSelf_meter, discCross_meter, match_meter)
     progress = ProgressMeter(
         len(dataloader) + (args.distributed and (len(dataloader.sampler) * args.world_size < len(dataloader.dataset))), 
-        progress_list, prefix="Test-Epoch[{}]: ".format(epoch))
+        progress_list, prefix="TestEpoch[{}]: ".format(epoch))
 
     # switch to evaluate mode
     model.module.backbone.eval()
@@ -505,13 +507,14 @@ def validate(args, model, criterion, dataloader, epoch, aux_val_loader=None):
     loss_meter.all_reduce()
     pck_meter.all_reduce()
 
-    if args.criterion == "weak":
-        discSelf_meter.all_reduce()
-        discCross_meter.all_reduce
-        match_meter.all_reduce
+    # if args.criterion == "weak":
+    #     discSelf_meter.all_reduce()
+    #     discCross_meter.all_reduce
+    #     match_meter.all_reduce
 
     if aux_val_loader is not None:
         run_validate(aux_val_loader, len(dataloader))
+    dist.barrier()
 
     progress.display_summary()
 
