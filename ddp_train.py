@@ -46,8 +46,14 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
         discSelf_meter = NewAverageMeter('discSelf_loss', ':4.2f')
         discCross_meter = NewAverageMeter('discCross_loss', ':4.2f') 
         match_meter = NewAverageMeter('match_loss', ':4.2f') 
-        progress_list.append(discSelf_meter, discCross_meter, match_meter)
-    progress = ProgressMeter(len(dataloader), progress_list, prefix="Epoch: [{}]".format(epoch))
+        progress_list += [discSelf_meter, discCross_meter, match_meter]
+        if args.weak_mode == 'grad_norm':
+            discSelfW_meter = NewAverageMeter('discSelf_W', ':4.2f')
+            discCrossW_meter = NewAverageMeter('discCross_W', ':4.2f')  
+            matchW_meter = NewAverageMeter('match_W', ':4.2f') 
+            progress_list += [discSelfW_meter, discCrossW_meter, matchW_meter]
+        
+    progress = ProgressMeter(len(dataloader), progress_list, prefix="Epoch[{}]".format(epoch))
 
     model.module.backbone.eval()
     model.module.learner.train()
@@ -186,13 +192,11 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             discCross_meter.update(task_loss[1].item(), bsz)
             match_meter.update(task_loss[2].item(), bsz)
 
-            print(task_loss.size())
-
             # go through the GradNorm module
             if args.criterion == 'weak' and args.weak_mode == 'grad_norm':
                 loss = model.module.gradNorm(task_loss)
             else:
-                loss = args.weak_lambda * task_loss
+                loss = (args.weak_lambda * task_loss).sum()
 
             del src_sim, trg_sim
 
@@ -203,6 +207,10 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
         print('step %d, loss %.4f'%(step, loss.item())) 
         if args.criterion == 'weak' and args.weak_mode == 'grad_norm':
             model.module.gradNorm.additional_forward_and_backward(model.module.learner, optimizer)
+            
+            discSelfW_meter.update(model.module.gradNorm.w[0].item(), bsz)
+            discCrossW_meter.update(model.module.gradNorm.w[1].item(), bsz)
+            matchW_meter.update(model.module.gradNorm.w[2].item(), bsz)
         else:
             loss.backward()
             if args.use_grad_clip:
@@ -252,11 +260,11 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             wandb.log({"iters": step + epoch * total_steps})
 
         # 5. print running pck, loss
-        if (step % 20 == 0) and dist.get_rank() == 0:
+        if (step % 50 == 0) and dist.get_rank() == 0:
             progress.display(step+1)
 
         # 7. collect gradients
-        if args.criterion == "weak":
+        if args.criterion == "weak" and step == 100:
             dist.barrier()
             discSelf_meter.all_reduce()
             discCross_meter.all_reduce
@@ -270,8 +278,8 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
 
 
         del src, trg, data
-        gc.collect()
-    torch.cuda.empty_cache()
+        # gc.collect()
+    # torch.cuda.empty_cache()
 
     # Draw class pck
     # if False and (epoch % 2)==0:
@@ -293,7 +301,7 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
         weight_map_path = os.path.join(Logger.logpath, "weight_map")
         os.makedirs(weight_map_path, exist_ok=True)
         weight_pth = draw_weight_map(
-            model.module.learner.layerweight.detach().clone().view(-1),
+            model.module.learner.layerweight.detach().clone(),
             epoch, step, weight_map_path)
         if args.use_wandb:
             wandb.log({"weight_map": wandb.Image(Image.open(weight_pth).convert("RGB"))})
@@ -780,12 +788,12 @@ def main(args):
     fix_randseed(seed=(0))
     cudnn.benchmark = False
     cudnn.deterministic = True
-    if rank == 0:
-        warnings.warn('You have chosen to seed training. '
-                            'This will turn on the CUDNN deterministic setting, '
-                            'which can slow down your training considerably! '
-                            'You may see unexpected behavior when restarting '
-                            'from checkpoints.\n')
+    # if rank == 0:
+    #     warnings.warn('You have chosen to seed training. '
+    #                         'This will turn on the CUDNN deterministic setting, '
+    #                         'which can slow down your training considerably! '
+    #                         'You may see unexpected behavior when restarting '
+    #                         'from checkpoints.\n')
     
     # ============ 2. Make Dataloader ... ============
     train_loader, val_loader, aux_val_loader = build_dataloader(args, rank, world_size)

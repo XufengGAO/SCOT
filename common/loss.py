@@ -61,14 +61,12 @@ class WeakDiscMatchLoss(nn.Module):
 
     def forward(self, x_cross: torch.Tensor, x_src: torch.Tensor, x_trg: torch.Tensor, src_feats: torch.Tensor, trg_feats: torch.Tensor) -> torch.Tensor:
         
-        discSelf_loss = self.information_entropy(x_src, self.match_norm_type) + self.information_entropy(x_trg, self.match_norm_type)
+        discSelf_loss = 0.5*(self.information_entropy(x_src, self.match_norm_type) + self.information_entropy(x_trg, self.match_norm_type))
         discCross_loss = self.information_entropy(x_cross, self.match_norm_type)
         match_loss = self.information_match(x_cross, src_feats, trg_feats)
-
-        print(discSelf_loss.size(), discCross_loss.size(), match_loss.size())
    
         # match_loss = torch.zeros(1).to(x_cross.device)
-        x
+        
         task_loss = torch.stack([discSelf_loss.mean(), discCross_loss.mean(), match_loss.mean()])
         return task_loss
 
@@ -88,7 +86,7 @@ class WeakDiscMatchLoss(nn.Module):
         trg_ent = (-(trg_pdf * torch.log2(trg_pdf)).sum(dim=2))
 
         score_net = ((src_ent + trg_ent).mean(dim=1) / 2)
-        # del src_ent, trg_ent, src_pdf, trg_pdf, correlation_matrix
+        del src_ent, trg_ent, src_pdf, trg_pdf, correlation_matrix
         
         return score_net
     

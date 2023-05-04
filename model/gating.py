@@ -10,7 +10,7 @@ class DynamicFeatureSelection(nn.Module):
         self.feat_ids = feat_ids
         
         # define a learnable weight w in (0,1)
-        self.layerweight = nn.Parameter(torch.zeros(1, len(self.feat_ids)))
+        self.layerweight = nn.Parameter(torch.zeros(len(self.feat_ids)))
 
         self.thres = thres
 
@@ -18,12 +18,12 @@ class DynamicFeatureSelection(nn.Module):
             nn.init.xavier_normal_(self.layerweight.data)
 
     def forward(self, idx, feat):
-        layerweight_norm = self.layerweight[0, idx].sigmoid()
+        layerweight_norm = self.layerweight[idx].sigmoid()
         return feat * layerweight_norm 
     
     def return_hyperpixel_ids(self):
         with torch.no_grad():
-            layerweight_norm = self.layerweight[0].sigmoid().data
+            layerweight_norm = self.layerweight.sigmoid().data
 
         return (layerweight_norm > self.thres).nonzero().view(-1).tolist()
 
@@ -60,11 +60,12 @@ class GradNorm(nn.Module):
             # get the gradient of this task loss with respect to the shared parameters
             GiW_t = torch.autograd.grad(
                 self.L_t[i], grad_norm_weights.parameters(),
-                    retain_graph=True, create_graph=True)
+                    retain_graph=True, create_graph=False)
             
-            # TODO, check GiW_t size
+            # GiW_t is tuple
             # compute the norm
             self.GW_t.append(torch.norm(GiW_t[0] * self.w[i]))
+
         self.GW_t = torch.stack(self.GW_t) # do not detatch
         self.bar_GW_t = self.GW_t.detach().mean()
         self.tilde_L_t = (self.L_t / self.L_0).detach()

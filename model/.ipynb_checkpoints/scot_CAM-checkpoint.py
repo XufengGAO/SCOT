@@ -9,35 +9,35 @@ from . import geometry
 from . import rhm_map
 from . import resnet
 import torch.nn as nn
-from . import gating
+from .gating import DynamicFeatureSelection, GradNorm
 from .base.geometry import Geometry
 import numpy as np
 
 class SCOT_CAM(nn.Module):
     r"""SCOT framework"""
-    def __init__(self, backbone, hyperpixels, benchmark, cam="", use_xavier=False, weight_thres=0.00, select_all=1.01):
+    def __init__(self, args, hyperpixels):
         r"""Constructor for SCOT framework"""
         super(SCOT_CAM, self).__init__()
 
         # 1. Feature extraction network initialization.
-        if backbone == 'resnet50':
+        if args.backbone == 'resnet50':
             self.backbone = resnet.resnet50(pretrained=True)
             nbottlenecks = [3, 4, 6, 3]
-        elif backbone == 'resnet101':
+        elif args.backbone == 'resnet101':
             self.backbone = resnet.resnet101(pretrained=True)
             nbottlenecks = [3, 4, 23, 3]
-        elif backbone == 'fcn101':
+        elif args.backbone == 'fcn101':
             self.backbone = gcv.model_zoo.get_fcn_resnet101_voc(pretrained=True)
-            if len(cam)==0:
+            if len(args.cam)==0:
                 self.backbone1 = gcv.model_zoo.get_fcn_resnet101_voc(pretrained=True)
                 self.backbone1.eval()
             nbottlenecks = [3, 4, 23, 3]
         else:
-            raise Exception('Unavailable backbone: %s' % backbone)
+            raise Exception('Unavailable backbone: %s' % args.backbone)
         self.bottleneck_ids = reduce(add, list(map(lambda x: list(range(x)), nbottlenecks)))
         self.layer_ids = reduce(add, [[i + 1] * x for i, x in enumerate(nbottlenecks)])
 
-        if len(cam) > 0: 
+        if len(args.cam) > 0: 
             print('use identity')
             self.backbone.fc = nn.Identity()
 
@@ -48,17 +48,17 @@ class SCOT_CAM(nn.Module):
 
         # Hyperpixel id and pre-computed jump and receptive field size initialization
         # (the jump and receptive field sizes for 'fcn101' are heuristic values)
-        if backbone in ['resnet50']:
+        if args.backbone in ['resnet50']:
             self.jsz = torch.tensor([4, 4, 4, 4, 8, 8, 8, 8, 16, 16, 16, 16, 16, 16, 32, 32, 32])
             self.rfsz = torch.tensor([11, 19, 27, 35, 43, 59, 75, 91, 107, 139, 171, 203, 235, 267, 299, 363, 427])
-        elif backbone in ['resnet101']:
+        elif args.backbone in ['resnet101']:
             self.jsz = torch.tensor([4, 4, 4, 4, 8, 8, 8, 8, 16, 16, \
                                      16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 16, \
                                      16, 16, 16, 16, 32, 32, 32])
             self.rfsz = torch.tensor([11, 19, 27, 35, 43, 59, 75, 91, 107, 139,\
                                       171, 203, 235, 267, 299, 331, 363, 395, 427, 459, 491, 523, 555, 587,\
                                       619, 651, 683, 715, 747, 779, 811, 843, 907, 971])
-        elif backbone in ['resnet50_ft', 'resnet101_ft']:
+        elif args.backbone in ['resnet50_ft', 'resnet101_ft']:
             self.jsz = torch.tensor([4, 4, 4, 4, 8, 8, 8, 8, 8, 8])
             self.rfsz = torch.tensor([11, 19, 27, 35, 43, 59, 75, 91, 107, 139])
         else:
@@ -67,15 +67,23 @@ class SCOT_CAM(nn.Module):
 
         # Miscellaneous
         self.hsfilter = geometry.gaussian2d(7)
-        self.benchmark = benchmark
+        self.benchmark = args.benchmark
 
         # weighted module
-        self.learner = gating.DynamicFeatureSelection(hyperpixels, use_xavier, weight_thres)
+        self.learner = DynamicFeatureSelection(hyperpixels, args.use_xavier, args.weight_thres)
         self.feat_size = (64, 64)
 
         self.relu = nn.ReLU(inplace=True)
 
-        self.select_all = select_all
+        self.select_all = args.select_all
+
+        # gradNorm module        
+        #self.gradNorm = GradNorm(args.weak_lambda, args.weak_mode)
+        if args.criterion == 'weak' and args.weak_mode == 'grad_norm':
+            self.gradNorm = GradNorm(num_of_task=3, alpha=args.weak_alpha)
+
+
+
 
     def forward(self, src_img, trg_img, classmap, src_mask, trg_mask, backbone, model_stage="train"):
         r"""Forward pass"""

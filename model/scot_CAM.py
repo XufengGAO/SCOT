@@ -79,7 +79,8 @@ class SCOT_CAM(nn.Module):
 
         # gradNorm module        
         #self.gradNorm = GradNorm(args.weak_lambda, args.weak_mode)
-        self.gradNorm = GradNorm(num_of_task=3, alpha=args.weak_alpha)
+        if args.criterion == 'weak' and args.weak_mode == 'grad_norm':
+            self.gradNorm = GradNorm(num_of_task=3, alpha=args.weak_alpha)
 
 
 

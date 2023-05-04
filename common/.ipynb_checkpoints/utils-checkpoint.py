@@ -10,6 +10,7 @@ from enum import Enum
 from torch import distributed as dist
 from .logger import Logger
 import re
+from collections import OrderedDict
 
 def find_knn(db_vectors, qr_vectors):
     r"""Finds K-nearest neighbors (Euclidean distance)"""
@@ -317,7 +318,7 @@ class ProgressMeter(object):
         entries = [self.prefix + self.batch_fmtstr.format(batch)]
         entries += [str(meter) for meter in self.meters]
         # print('\t'.join(entries))
-        Logger.info('\t'.join(entries))
+        Logger.info(',  '.join(entries))
         
     def display_summary(self):
         entries = [self.prefix]
@@ -329,3 +330,26 @@ class ProgressMeter(object):
         num_digits = len(str(num_batches // 1))
         fmt = '{:' + str(num_digits) + 'd}'
         return '[' + fmt + '/' + fmt.format(num_batches) + ']'
+
+def reduce_results(results):
+    """Coalesced mean all reduce over a dictionary of 0-dimensional tensors"""
+    names, values = [], []
+    for k, v in results.items():
+        names.append(k)
+        values.append(v)
+
+    # Peform the actual coalesced all_reduce
+    values = torch.stack([torch.tensor(v) for v in values], dim=0).cuda()
+    dist.all_reduce(values, dist.ReduceOp.SUM)
+    values.div_(dist.get_world_size())
+    values = torch.chunk(values, values.size(0), dim=0)
+
+    # Reconstruct the dictionary
+    return OrderedDict((k, v.item()) for k, v in zip(names, values))
+
+def reduce_tensor(tensor):
+    rt = tensor.clone()
+    dist.all_reduce(rt, op=dist.ReduceOp.SUM)
+    rt /= dist.get_world_size()
+    return rt
+

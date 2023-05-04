@@ -52,34 +52,23 @@ class StrongCrossEntropyLoss(nn.Module):
     
 class WeakDiscMatchLoss(nn.Module):
     r"""Weakly-supervised discriminative and maching loss"""
-    def __init__(self, weak_lambda: torch.Tensor, weak_mode='custom_lambda', alpha=0.1, temp=1.0,  match_norm_type='l1') -> None:
+    def __init__(self, temp=1.0,  match_norm_type='l1') -> None:
         super(WeakDiscMatchLoss, self).__init__()
-        assert alpha > 0.0, "negative alpha is not allowed"
         self.softmax = torch.nn.Softmax(dim=1)
-        self.alpha = alpha
         self.eps = 1e-30
         self.temp = temp
         self.match_norm_type = match_norm_type
 
-        if weak_mode == 'custom_lambda':
-            self.weak_lambda = weak_lambda
-        elif weak_mode == 'grad_norm':
-            pass
-
-        self.weak_mode = weak_mode
-
     def forward(self, x_cross: torch.Tensor, x_src: torch.Tensor, x_trg: torch.Tensor, src_feats: torch.Tensor, trg_feats: torch.Tensor) -> torch.Tensor:
         
-        discSelf_loss = self.information_entropy(x_src, self.match_norm_type) + self.infor_entropy(x_trg, self.match_norm_type)
+        discSelf_loss = 0.5*(self.information_entropy(x_src, self.match_norm_type) + self.information_entropy(x_trg, self.match_norm_type))
         discCross_loss = self.information_entropy(x_cross, self.match_norm_type)
         match_loss = self.information_match(x_cross, src_feats, trg_feats)
-
    
         # match_loss = torch.zeros(1).to(x_cross.device)
-
-        total_loss = self.weak_lambda[0] * discSelf_loss + self.weak_mode[1] * discCross_loss + self.weak_mode[1] * match_loss
-
-        return total_loss.mean(), discSelf_loss.mean(), discCross_loss.mean(), match_loss.mean()
+        
+        task_loss = torch.stack([discSelf_loss.mean(), discCross_loss.mean(), match_loss.mean()])
+        return task_loss
 
 
     def information_entropy(self, correlation_matrix, norm_type='l1'):
@@ -97,9 +86,9 @@ class WeakDiscMatchLoss(nn.Module):
         trg_ent = (-(trg_pdf * torch.log2(trg_pdf)).sum(dim=2))
 
         score_net = ((src_ent + trg_ent).mean(dim=1) / 2)
-        # del src_ent, trg_ent, src_pdf, trg_pdf, correlation_matrix
+        del src_ent, trg_ent, src_pdf, trg_pdf, correlation_matrix
         
-        return score_net.mean()
+        return score_net
     
     def information_match(self, x_cross: torch.Tensor, src_feats: torch.Tensor, trg_feats: torch.Tensor):
         src_feats = src_feats / (torch.norm(src_feats, p=2, dim=2, keepdim=True)+ self.eps) # normalized features
@@ -113,32 +102,8 @@ class WeakDiscMatchLoss(nn.Module):
 
         match_loss = 0.5 * (src2trg_dist.norm(dim=(1)).mean(dim=1) + trg2src_dist.norm(dim=(1)).mean(dim=1))
 
-        return match_loss.mean()
+        return match_loss
 
-
-    def compute_loss(self, cross_sim, src_sim, trg_sim, src_feats, trg_feats, weak_norm='l1', temp=1.0):
-        r"""Strongly-supervised matching loss (L_{match})"""
-        
-        # 1. cross-entropy loss for self-correleation maps
-        # print(src_sim.size(), trg_sim.size(), src_feats.size(), trg_feats.size(), cross_sim.size())
-        discSelf_loss = Objective.infor_entropy(src_sim, weak_norm) + Objective.infor_entropy(trg_sim, weak_norm)
-        discCross_loss = Objective.infor_entropy(cross_sim, weak_norm)
-        # disc_loss = torch.zeros(1).to(cross_sim.device)
-        
-        src_feats = src_feats / (torch.norm(src_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10) # normalized features
-        trg_feats = trg_feats / (torch.norm(trg_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10)
-
-        # 2. matching loss for features
-        src2trg_dist = torch.bmm(src_feats.transpose(1,2), F.softmax(cross_sim/temp, dim=1)) - trg_feats.transpose(1,2)
-        trg2src_dist = torch.bmm(trg_feats.transpose(1,2), F.softmax((cross_sim.transpose(1,2))/temp, dim=1)) - src_feats.transpose(1,2)
-        #src2trg_dist = src2trg_dist / (torch.norm(src2trg_dist, p=2, dim=1, keepdim=True)+ 1e-10)
-        #trg2src_dist = trg2src_dist / (torch.norm(trg2src_dist, p=2, dim=1, keepdim=True)+ 1e-10)
-
-        match_loss = 0.5 * (src2trg_dist.norm(dim=(1)).mean() + trg2src_dist.norm(dim=(1)).mean())
-        del src2trg_dist, trg2src_dist
-        match_loss = torch.zeros(1).to(cross_sim.device)
-        
-        return discSelf_loss, discCross_loss, match_loss
 
 class StrongFlowLoss(nn.Module):
     r"""Strongly-supervised flow loss"""
@@ -160,8 +125,8 @@ class StrongFlowLoss(nn.Module):
     
 def soft_argmax(self, corr, beta=0.02, feature_size=64):
     r'''SFNet: Learning Object-aware Semantic Flow (Lee et al.)'''
-    x_normal = nn.Parameter(torch.tensor(np.linspace(-1,1,feature_size), dtype=torch.float, requires_grad=False)).to(device)
-    y_normal = nn.Parameter(torch.tensor(np.linspace(-1,1,feature_size), dtype=torch.float, requires_grad=False)).to(device)
+    x_normal = nn.Parameter(torch.tensor(np.linspace(-1,1,feature_size), dtype=torch.float, requires_grad=False)).cuda()
+    y_normal = nn.Parameter(torch.tensor(np.linspace(-1,1,feature_size), dtype=torch.float, requires_grad=False)).cuda()
 
     b,_,h,w = corr.size()
     
