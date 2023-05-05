@@ -253,11 +253,13 @@ def fix_randseed(seed):
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
+
 class Summary(Enum):
     NONE = 0
     AVERAGE = 1
     SUM = 2
     COUNT = 3
+    VAL = 4
 
 class NewAverageMeter(object):
     """Computes and stores the average and current value"""
@@ -290,8 +292,13 @@ class NewAverageMeter(object):
         self.avg = self.sum / self.count
 
     def __str__(self):
-        fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
+        if self.summary_type is Summary.VAL:
+            fmtstr = '{name} {val' + self.fmt + '}'
+        else:
+            fmtstr = '{name} {val' + self.fmt + '} ({avg' + self.fmt + '})'
+
         return fmtstr.format(**self.__dict__)
+
 
     def summary(self):
         fmtstr = ''

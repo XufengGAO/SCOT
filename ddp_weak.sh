@@ -3,7 +3,7 @@
 
 benchmark="pfpascal"
 backbone="resnet50"
-nnodes=1
+nnodes=4
 master_addr="10.233.114.222"
 master_port=12362
 
@@ -18,18 +18,18 @@ python3 -m torch.distributed.launch --master_port=${master_port} --nproc_per_nod
                                     --select_all 0.90 \
                                     --criterion 'weak'\
                                     --temp 0.05 \
-                                    --weak_lambda '[1.0, 1.0, 1.0]' \
-                                    --weak_alpha 0.0 \
-                                    --weak_mode 'grad_norm' \
+                                    --weak_lambda '[0.0, 0.0, 1.0]' \
+                                    --weak_alpha 1.5 \
+                                    --weak_mode 'custom_lambda' \
                                     --match_norm_type 'l1' \
                                     --alpha 0.1 \
                                     --lr 0.003 \
-                                    --momentum 0.99 \
-                                    --epochs 50 \
-                                    --batch_size 3 \
+                                    --momentum 0.9 \
+                                    --epochs 20 \
+                                    --batch_size 6 \
                                     --optimizer 'sgd' \
                                     --exp2 0.5 \
-                                    --use_wandb False \
+                                    --use_wandb True \
                                     --wandb_proj 'ddp_scot' \
                                     --loss_stage "votes" \
                                     --cam "mask/resnet50/200_300" \
