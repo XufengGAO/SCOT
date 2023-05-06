@@ -52,12 +52,13 @@ class StrongCrossEntropyLoss(nn.Module):
     
 class WeakDiscMatchLoss(nn.Module):
     r"""Weakly-supervised discriminative and maching loss"""
-    def __init__(self, temp=1.0,  match_norm_type='l1') -> None:
+    def __init__(self, temp=1.0,  match_norm_type='l1', weak_lambda=torch.tensor([1,1,1])) -> None:
         super(WeakDiscMatchLoss, self).__init__()
         self.softmax = torch.nn.Softmax(dim=1)
         self.eps = 1e-30
         self.temp = temp
         self.match_norm_type = match_norm_type
+        self.weak_lambda = weak_lambda
 
     def forward(self, x_cross: torch.Tensor, x_src: torch.Tensor, x_trg: torch.Tensor, src_feats: torch.Tensor, trg_feats: torch.Tensor) -> torch.Tensor:
         
