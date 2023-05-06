@@ -12,8 +12,8 @@ from PIL import Image
 from data.download import load_dataset
 from model import scot_CAM, geometry
 from common.loss import StrongCrossEntropyLoss, StrongFlowLoss, WeakDiscMatchLoss
-from common.utils import match_idx, mean, draw_weight_map, boolean_string, fix_randseed, parse_string, NewAverageMeter, ProgressMeter, Summary
-from common.logger import AverageMeter, Logger
+from common.utils import match_idx, mean, draw_weight_map, boolean_string, fix_randseed, parse_string, NewAverageMeter, ProgressMeter
+from common.logger import Logger
 from common.evaluation import Evaluator
 import torch.optim as optim
 from pprint import pprint
@@ -21,13 +21,11 @@ import wandb
 import re
 import torch.backends.cudnn as cudnn
 from torch.utils.data import Subset
-import warnings
 import numpy as np
+
 # DDP package
 from torch.utils.data.distributed import DistributedSampler
-import tempfile
 from torch import distributed as dist
-from collections import OrderedDict
 import gc
 wandb.login()
 
@@ -199,6 +197,8 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             loss = (args.weak_lambda * task_loss).sum()
 
             del src_sim, trg_sim
+        del cross_sim
+        gc.collect()
 
         loss_meter.update(loss.item(), bsz)
         
@@ -210,12 +210,22 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
                     task_loss[i], model.module.learner.parameters(),
                         retain_graph=True, create_graph=False)
                 
+                
                 # GiW_t is tuple
                 # compute the norm
-                GW_t.append(torch.norm(GiW_t[0]).item())
-            discSelfGrad_meter.update(GW_t[0], bsz)
-            discCrossGrad_meter.update(GW_t[1], bsz)
-            matchGrad_meter.update(GW_t[2], bsz)
+                
+                # GW_t.append(torch.norm(GiW_t[0]).item())
+                
+                # print('gwt', GiW_t)
+                
+                # task_loss[i].backward(retain_graph=True)
+                # print('grad', model.module.learner.layerweight.grad)
+                # model.module.learner.layerweight.grad.zero_()
+                
+            # discSelfGrad_meter.update(GW_t[0], bsz)
+            # discCrossGrad_meter.update(GW_t[1], bsz)
+            # matchGrad_meter.update(GW_t[2], bsz)
+            # print(GW_t)
             
         # back propagation
         optimizer.zero_grad()   
@@ -225,7 +235,7 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
                 model.parameters(), args.grad_clip
             )
         optimizer.step()
-        del loss, cross_sim
+        del loss
 
         # 4. collect results
         with torch.no_grad():
@@ -268,11 +278,11 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             progress.display(step+1)
 
         # 7. collect gradients
-        if args.criterion == "weak":
+        if args.criterion == "weak" and (step % 100 == 0):
             dist.barrier()
             discSelf_meter.all_reduce()
-            discCross_meter.all_reduce
-            match_meter.all_reduce
+            discCross_meter.all_reduce()
+            match_meter.all_reduce()
             discSelfGrad_meter.all_reduce()
             discCrossGrad_meter.all_reduce()
             matchGrad_meter.all_reduce()
@@ -281,7 +291,7 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
                            "discSelfGrad": discSelfGrad_meter.avg, "discCrossGrad": discCrossGrad_meter.avg, "matchGrad": matchGrad_meter.avg})
 
         del src, trg, data
-        # gc.collect()
+        gc.collect()
     # torch.cuda.empty_cache()
 
     # Draw class pck

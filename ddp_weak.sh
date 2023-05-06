@@ -3,7 +3,7 @@
 
 benchmark="pfpascal"
 backbone="resnet101"
-nnodes=4
+nnodes=2
 master_addr="10.233.114.222"
 master_port=12362
 
@@ -28,7 +28,7 @@ python3 -m torch.distributed.launch --master_port=${master_port} --nproc_per_nod
                                     --batch_size 2 \
                                     --optimizer 'sgd' \
                                     --exp2 0.5 \
-                                    --use_wandb True \
+                                    --use_wandb False \
                                     --wandb_proj 'ddp_scot' \
                                     --loss_stage "votes" \
                                     --cam "mask/resnet101/200_300" \

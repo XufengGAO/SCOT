@@ -210,14 +210,22 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
                     task_loss[i], model.module.learner.parameters(),
                         retain_graph=True, create_graph=False)
                 
+                
                 # GiW_t is tuple
                 # compute the norm
-                print(GiW_t.size())
-                x
-                GW_t.append(torch.norm(GiW_t[0]).item())
-            discSelfGrad_meter.update(GW_t[0], bsz)
-            discCrossGrad_meter.update(GW_t[1], bsz)
-            matchGrad_meter.update(GW_t[2], bsz)
+                
+                # GW_t.append(torch.norm(GiW_t[0]).item())
+                
+                # print('gwt', GiW_t)
+                
+                # task_loss[i].backward(retain_graph=True)
+                # print('grad', model.module.learner.layerweight.grad)
+                # model.module.learner.layerweight.grad.zero_()
+                
+            # discSelfGrad_meter.update(GW_t[0], bsz)
+            # discCrossGrad_meter.update(GW_t[1], bsz)
+            # matchGrad_meter.update(GW_t[2], bsz)
+            # print(GW_t)
             
         # back propagation
         optimizer.zero_grad()   
@@ -270,11 +278,11 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             progress.display(step+1)
 
         # 7. collect gradients
-        if args.criterion == "weak":
+        if args.criterion == "weak" and (step % 100 == 0):
             dist.barrier()
             discSelf_meter.all_reduce()
-            discCross_meter.all_reduce
-            match_meter.all_reduce
+            discCross_meter.all_reduce()
+            match_meter.all_reduce()
             discSelfGrad_meter.all_reduce()
             discCrossGrad_meter.all_reduce()
             matchGrad_meter.all_reduce()
@@ -283,7 +291,7 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
                            "discSelfGrad": discSelfGrad_meter.avg, "discCrossGrad": discCrossGrad_meter.avg, "matchGrad": matchGrad_meter.avg})
 
         del src, trg, data
-        # gc.collect()
+        gc.collect()
     # torch.cuda.empty_cache()
 
     # Draw class pck
