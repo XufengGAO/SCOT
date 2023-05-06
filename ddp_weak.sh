@@ -24,8 +24,8 @@ python3 -m torch.distributed.launch --master_port=${master_port} --nproc_per_nod
                                     --alpha 0.1 \
                                     --lr 0.003 \
                                     --momentum 0.9 \
-                                    --epochs 60 \
-                                    --batch_size 6 \
+                                    --epochs 50 \
+                                    --batch_size 2 \
                                     --optimizer 'sgd' \
                                     --exp2 0.5 \
                                     --use_wandb True \

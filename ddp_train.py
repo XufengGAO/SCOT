@@ -43,14 +43,14 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
     progress_list.append(pck_meter)
 
     if args.criterion == "weak":
-        discSelf_meter = NewAverageMeter('discSelf_loss', ':4.2f')
-        discCross_meter = NewAverageMeter('discCross_loss', ':4.2f') 
-        match_meter = NewAverageMeter('match_loss', ':4.2f') 
+        discSelf_meter = NewAverageMeter('Selfloss', ':4.2f')
+        discCross_meter = NewAverageMeter('Crossloss', ':4.2f') 
+        match_meter = NewAverageMeter('matchloss', ':4.2f') 
         progress_list += [discSelf_meter, discCross_meter, match_meter]
         
-        discSelfGrad_meter = NewAverageMeter('discSelf_W', ':4.2f')
-        discCrossGrad_meter = NewAverageMeter('discCross_W', ':4.2f')  
-        matchGrad_meter = NewAverageMeter('match_W', ':4.2f') 
+        discSelfGrad_meter = NewAverageMeter('SelfG', ':4.2f')
+        discCrossGrad_meter = NewAverageMeter('CrossG', ':4.2f')  
+        matchGrad_meter = NewAverageMeter('matchG', ':4.2f') 
         progress_list += [discSelfGrad_meter, discCrossGrad_meter, matchGrad_meter]
         
     progress = ProgressMeter(len(dataloader), progress_list, prefix="Epoch[{}]".format(epoch))
@@ -198,10 +198,25 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             # go through the GradNorm module
             loss = (args.weak_lambda * task_loss).sum()
 
-            del src_sim, trg_sim, task_loss
+            del src_sim, trg_sim
 
         loss_meter.update(loss.item(), bsz)
+        
+        if args.criterion == "weak":
+            GW_t = []
+            for i in range(3):
+                # get the gradient of this task loss with respect to the shared parameters
+                GiW_t = torch.autograd.grad(
+                    task_loss[i], model.module.learner.parameters(),
+                        retain_graph=True, create_graph=False)
                 
+                # GiW_t is tuple
+                # compute the norm
+                GW_t.append(torch.norm(GiW_t[0]).item())
+            discSelfGrad_meter.update(GW_t[0], bsz)
+            discCrossGrad_meter.update(GW_t[1], bsz)
+            matchGrad_meter.update(GW_t[2], bsz)
+            
         # back propagation
         optimizer.zero_grad()   
         loss.backward()
@@ -209,24 +224,6 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             torch.nn.utils.clip_grad.clip_grad_value_(
                 model.parameters(), args.grad_clip
             )
-
-        # collect gridents
-        if args.criterion == "weak":
-            GW_t = []
-            for i in range(3):
-                # get the gradient of this task loss with respect to the shared parameters
-                GiW_t = torch.autograd.grad(
-                    task_loss[i], model.module.learner.layerweight.parameters(),
-                        retain_graph=False, create_graph=False)
-                
-                # GiW_t is tuple
-                # compute the norm
-                GW_t.append(torch.norm(GiW_t[0]).items())
-            discSelfGrad_meter.update(GW_t[0], bsz)
-            discCrossGrad_meter.update(GW_t[1], bsz)
-            matchGrad_meter.update(GW_t[2], bsz)
-            print(GW_t)
-
         optimizer.step()
         del loss, cross_sim
 
@@ -271,7 +268,7 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             progress.display(step+1)
 
         # 7. collect gradients
-        if args.criterion == "weak" and (iters%(total_steps/2) == 0):
+        if args.criterion == "weak":
             dist.barrier()
             discSelf_meter.all_reduce()
             discCross_meter.all_reduce
@@ -829,8 +826,7 @@ def main(args):
     optimizer = build_optimizer(args, model)
     lr_scheduler = build_scheduler(args, optimizer, len(train_loader), config=None)
     if args.criterion == "weak":
-        args.weak_lambda = torch.FloatTensor(list(map(float, re.findall(r"[-+]?(?:\d*\.*\d+)", args.weak_lambda)))).cuda()
-        criterion = WeakDiscMatchLoss(args.temp, args.match_norm_type, args.weak_lambda)
+        criterion = WeakDiscMatchLoss(args.temp, args.match_norm_type)
     elif args.criterion == "strong_ce":
         criterion = StrongCrossEntropyLoss(args.alpha)
     elif args.criterion == "flow":
@@ -863,7 +859,7 @@ def main(args):
     # ============ 7. Start training ... ============
     log_benchmark = {}
     Logger.info(">>>>>>>>>> Start training")
-
+    args.weak_lambda = torch.FloatTensor(list(map(float, re.findall(r"[-+]?(?:\d*\.*\d+)", args.weak_lambda)))).cuda()
     for epoch in range(args.start_epoch, args.epochs):
         train_loader.sampler.set_epoch(epoch)
 

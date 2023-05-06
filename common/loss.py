@@ -8,7 +8,7 @@ import numpy as np
 from model.objective import Objective
 import torch.nn.functional as F
 from .norm import unit_gaussian_normalize, l1normalize, linearnormalize
-
+import gc
 class StrongCrossEntropyLoss(nn.Module):
     r"""Strongly-supervised cross entropy loss"""
     def __init__(self, alpha=0.1) -> None:
@@ -52,13 +52,12 @@ class StrongCrossEntropyLoss(nn.Module):
     
 class WeakDiscMatchLoss(nn.Module):
     r"""Weakly-supervised discriminative and maching loss"""
-    def __init__(self, temp=1.0,  match_norm_type='l1', weak_lambda=torch.tensor([1,1,1])) -> None:
+    def __init__(self, temp=1.0,  match_norm_type='l1') -> None:
         super(WeakDiscMatchLoss, self).__init__()
         self.softmax = torch.nn.Softmax(dim=1)
         self.eps = 1e-30
         self.temp = temp
         self.match_norm_type = match_norm_type
-        self.weak_lambda = weak_lambda
 
     def forward(self, x_cross: torch.Tensor, x_src: torch.Tensor, x_trg: torch.Tensor, src_feats: torch.Tensor, trg_feats: torch.Tensor) -> torch.Tensor:
         
@@ -88,6 +87,7 @@ class WeakDiscMatchLoss(nn.Module):
 
         score_net = ((src_ent + trg_ent).mean(dim=1) / 2)
         del src_ent, trg_ent, src_pdf, trg_pdf, correlation_matrix
+        gc.collect()
         
         return score_net
     
@@ -102,7 +102,8 @@ class WeakDiscMatchLoss(nn.Module):
         #trg2src_dist = trg2src_dist / (torch.norm(trg2src_dist, p=2, dim=1, keepdim=True)+ 1e-10)
 
         match_loss = 0.5 * (src2trg_dist.norm(dim=(1)).mean(dim=1) + trg2src_dist.norm(dim=(1)).mean(dim=1))
-
+        del src_feats, trg_feats, src2trg_dist, trg2src_dist
+        gc.collect()
         return match_loss
 
 

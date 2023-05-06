@@ -12,7 +12,7 @@ import torch.nn as nn
 from .gating import DynamicFeatureSelection, GradNorm
 from .base.geometry import Geometry
 import numpy as np
-
+import gc
 class SCOT_CAM(nn.Module):
     r"""SCOT framework"""
     def __init__(self, args, hyperpixels):
@@ -113,6 +113,7 @@ class SCOT_CAM(nn.Module):
 
         sim = self.relu(torch.bmm(src_feats, trg_feats.transpose(1, 2))) # cross-sim, source->target
         del src_feats, trg_feats
+        gc.collect()
         return sim
 
     def calculate_votes(self, src_feats, trg_feats, epsilon, exp2, src_size, trg_size, src_weights=None, trg_weights=None):
@@ -134,6 +135,7 @@ class SCOT_CAM(nn.Module):
             nus = (torch.ones((src_size[0],trg_size[1]))/trg_size[1])
 
         del src_weights, trg_weights
+        gc.collect()
 
         ## ---- <Run Optimal Transport Algorithm> ----
         cnt = 0
@@ -158,6 +160,7 @@ class SCOT_CAM(nn.Module):
 
             votes.append(PI.unsqueeze(0))
         del mus, nus, src_feats, trg_feats, sim, costs
+        gc.collect()
 
         votes = torch.cat(votes, dim=0)
 
@@ -188,6 +191,7 @@ class SCOT_CAM(nn.Module):
 
         votes_geo = votes * geometric_scores
         del nbins_x, nbins_y, hs_cellsize, bin_ids, hspace, hbin_ids, new_hspace, votes
+        gc.collect()
         
         return votes_geo
 
@@ -239,6 +243,7 @@ class SCOT_CAM(nn.Module):
                     mask = self.get_CAM_multi(img, feat_map, fc, sz=(img.size(2),img.size(3)), top_k=2)                 
             scale = 1.0
             del feat_map, fc
+            gc.collect()
             
             hpos = geometry.center(hpgeometry) # 4096 2
             # print("hpos", hpos.size(), hpos[:], Geometry.rf_center.size(), Geometry.rf_center[:])
@@ -253,6 +258,7 @@ class SCOT_CAM(nn.Module):
             weights[hselect>0.6*scale] = 1.0
 
             del hpos, hselect
+            gc.collect()
             
         # print('no-clasmap', weights.size())
         # print(img.size())
@@ -261,6 +267,7 @@ class SCOT_CAM(nn.Module):
         
         results = {'box':hpgeometry, 'feats':hyperfeats, 'imsize':img.size()[2:][::-1], 'weights':weights}
         del hpgeometry, hyperfeats, weights
+        gc.collect()
         return results
 
     def extract_intermediate_feat(self, img, return_hp=True, backbone='resnet101'):
@@ -276,7 +283,7 @@ class SCOT_CAM(nn.Module):
         """
 
         feats = []
-
+        channels = []
         with torch.no_grad():
             # Layer 0
             feat = self.backbone.conv1.forward(img)
@@ -285,6 +292,7 @@ class SCOT_CAM(nn.Module):
             feat = self.backbone.maxpool.forward(feat)
             if 0 in self.hyperpixels:
                 feats.append(feat) # scaled feats
+                channels.append(feat.size()[1])
 
             # Layer 1-4
             for hid, (bid, lid) in enumerate(zip(self.bottleneck_ids, self.layer_ids)):
@@ -305,6 +313,7 @@ class SCOT_CAM(nn.Module):
 
                 if hid + 1 in self.hyperpixels:
                     feats.append(feat)
+                    channels.append(feat.size()[1])
 
                 feat = self.backbone.__getattr__('layer%d' % lid)[bid].relu.forward(feat)
 
@@ -428,6 +437,7 @@ class SCOT_CAM(nn.Module):
             map_list.append(output_cam)
 
             del output_cam, cam
+            gc.collect()
 
         map_list = torch.stack(map_list,dim=0) # 3xBx240x240
         sum_cam = map_list.sum(dim=0) # Bx240x240
@@ -440,6 +450,7 @@ class SCOT_CAM(nn.Module):
         #     file_name = "{}".format(idx)
         #     imgm.save("/home/xufeng/Documents/EPFL_Course/sp_code/SCOT/img/{}.png".format(file_name))
         del map_list, sum_cam, sum_cam_max
+        gc.collect()
 
         return norm_cam
 

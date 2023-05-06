@@ -8,7 +8,7 @@ import numpy as np
 from model.objective import Objective
 import torch.nn.functional as F
 from .norm import unit_gaussian_normalize, l1normalize, linearnormalize
-
+import gc
 class StrongCrossEntropyLoss(nn.Module):
     r"""Strongly-supervised cross entropy loss"""
     def __init__(self, alpha=0.1) -> None:
@@ -87,6 +87,7 @@ class WeakDiscMatchLoss(nn.Module):
 
         score_net = ((src_ent + trg_ent).mean(dim=1) / 2)
         del src_ent, trg_ent, src_pdf, trg_pdf, correlation_matrix
+        gc.collect()
         
         return score_net
     
@@ -101,7 +102,8 @@ class WeakDiscMatchLoss(nn.Module):
         #trg2src_dist = trg2src_dist / (torch.norm(trg2src_dist, p=2, dim=1, keepdim=True)+ 1e-10)
 
         match_loss = 0.5 * (src2trg_dist.norm(dim=(1)).mean(dim=1) + trg2src_dist.norm(dim=(1)).mean(dim=1))
-
+        del src_feats, trg_feats, src2trg_dist, trg2src_dist
+        gc.collect()
         return match_loss
 
 
