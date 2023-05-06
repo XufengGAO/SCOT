@@ -110,7 +110,7 @@ def draw_class_pck(sel_buffer, class_pck_path, epoch=0, step=0):
     
     return class_pth
 
-def draw_weight_map(weight, epoch, step, weight_map_path):
+def draw_weight_map(weight, epoch, weight_map_path):
 
     num_weight = weight.numel()
     pad_width = 20 if num_weight == 17 else 35

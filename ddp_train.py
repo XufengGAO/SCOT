@@ -12,7 +12,7 @@ from PIL import Image
 from data.download import load_dataset
 from model import scot_CAM, geometry
 from common.loss import StrongCrossEntropyLoss, StrongFlowLoss, WeakDiscMatchLoss
-from common.utils import match_idx, mean, draw_weight_map, boolean_string, fix_randseed, parse_string, NewAverageMeter, ProgressMeter
+from common.utils import match_idx, mean, draw_weight_map, boolean_string, fix_randseed, parse_string, NewAverageMeter, ProgressMeter, reduce_tensor, Summary
 from common.logger import Logger
 from common.evaluation import Evaluator
 import torch.optim as optim
@@ -26,7 +26,7 @@ import numpy as np
 # DDP package
 from torch.utils.data.distributed import DistributedSampler
 from torch import distributed as dist
-import gc
+
 wandb.login()
 
 
@@ -34,34 +34,33 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
     # Logger.info(f'Current learning rate for different parameter groups: {[it["lr"] for it in optimizer.param_groups]}')
     # average_meter = AverageMeter(args.benchmark, dataloader.dataset.cls)
 
-    progress_list = []
+    # 1. Meter
     loss_meter = NewAverageMeter('loss', ':4.2f')
-    progress_list.append(loss_meter)
     pck_meter = NewAverageMeter('pck', ':4.2f')
-    progress_list.append(pck_meter)
-
+    progress_list = [loss_meter, pck_meter]
     if args.criterion == "weak":
         discSelf_meter = NewAverageMeter('Selfloss', ':4.2f')
         discCross_meter = NewAverageMeter('Crossloss', ':4.2f') 
         match_meter = NewAverageMeter('matchloss', ':4.2f') 
         progress_list += [discSelf_meter, discCross_meter, match_meter]
-        
-        discSelfGrad_meter = NewAverageMeter('SelfG', ':4.2f')
-        discCrossGrad_meter = NewAverageMeter('CrossG', ':4.2f')  
-        matchGrad_meter = NewAverageMeter('matchG', ':4.2f') 
-        progress_list += [discSelfGrad_meter, discCrossGrad_meter, matchGrad_meter]
-        
+
+        discSelfG_meter = NewAverageMeter('SelfG', ':4.2f', summary_type=Summary.VAL)
+        discCrossG_meter = NewAverageMeter('CrossG', ':4.2f', summary_type=Summary.VAL) 
+        matchG_meter = NewAverageMeter('matchG', ':4.2f', summary_type=Summary.VAL) 
+        progress_list += [discSelfG_meter, discCrossG_meter, matchG_meter]
+
     progress = ProgressMeter(len(dataloader), progress_list, prefix="Epoch[{}]".format(epoch))
 
+    # 2. model status
     model.module.backbone.eval()
     model.module.learner.train()
     optimizer.zero_grad()
 
-    total_steps = len(dataloader)
 
+    total_steps = len(dataloader)
     Pointtime = {'Point-1':0, 'Point-2':0,'Point-3':0,'Point-4':0,'Point-5':0,'Point-6':0,}
     for step, data in enumerate(dataloader):
-        # move data to the same device as model
+
         iters = step + epoch * total_steps
         if args.use_wandb and dist.get_rank() == 0:
             wandb.log({"iters": iters})
@@ -78,9 +77,9 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
         else:
             data["src_mask"], data["trg_mask"] = None, None
         bsz = data["src_img"].size(0)
-
-        start_time = time.time()
+        
         # 1. compute output
+        start_time = time.time()
         src, trg = model(
             data["src_img"],
             data["trg_img"],
@@ -94,59 +93,22 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
 
         # {'box', 'feats', 'imsize', 'weights'}
         # 2. calculate sim
+        start_time = time.time()
         assert args.loss_stage in ["sim", "sim_geo", "votes", "votes_geo",], "Unknown loss stage"
-        cross_sim, src_sim, trg_sim = 0, 0, 0
+        weak_mode = True if args.criterion == "weak" else False
         if "sim" in args.loss_stage:
-            cross_sim = model.module.calculate_sim(src["feats"], trg["feats"])
-            if args.criterion == "weak":
-                src_sim = model.module.calculate_sim(src["feats"], src["feats"])
-                trg_sim = model.module.calculate_sim(trg["feats"], trg["feats"])
+            cross_sim, src_sim, trg_sim = model.module.calculate_sim(src["feats"], trg["feats"], weak_mode)
 
         if "votes" in args.loss_stage:
             src_size = (src["feats"].size()[0], src["feats"].size()[1])
             trg_size = (trg["feats"].size()[0], trg["feats"].size()[1])
-            cross_sim = model.module.calculate_votes(
-                src["feats"],
-                trg["feats"],
-                args.epsilon,
-                args.exp2,
-                src_size,
-                trg_size,
-                src["weights"],
-                trg["weights"],
-            )
-            if args.criterion == "weak":
-                src_sim = model.module.calculate_votes(
-                    src["feats"],
-                    src["feats"],
-                    args.epsilon,
-                    args.exp2,
-                    src_size,
-                    src_size,
-                    src["weights"],
-                    src["weights"],
-                )
-                trg_sim = model.module.calculate_votes(
-                    trg["feats"],
-                    trg["feats"],
-                    args.epsilon,
-                    args.exp2,
-                    trg_size,
-                    trg_size,
-                    trg["weights"],
-                    trg["weights"],
-                )
+            cross_sim, src_sim, trg_sim = model.module.calculate_votes(
+                src["feats"], trg["feats"], args.epsilon, args.exp2, src_size, trg_size, src["weights"], trg["weights"], weak_mode)
+
         if "geo" in args.loss_stage:
             cross_sim = model.module.calculate_votesGeo(
-                cross_sim, src["imsize"], trg["imsize"], src["box"], trg["box"]
+                cross_sim, src_sim, trg_sim, src["imsize"], trg["imsize"], src["box"], trg["box"]
             )
-            if args.criterion == "weak":
-                src_sim = model.module.calculate_votesGeo(
-                    src_sim, src["imsize"], src["imsize"], src["box"], src["box"]
-                )
-                trg_sim = model.module.calculate_votesGeo(
-                    trg_sim, trg["imsize"], trg["imsize"], trg["box"], trg["box"]
-                )
         Pointtime['Point-3'] += ((time.time()-start_time)/60)
 
         start_time = time.time()
@@ -157,19 +119,12 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             with torch.no_grad():
                 src_center = geometry.center(src["box"])
                 trg_center = geometry.center(trg["box"])
-                data["src_kpidx"] = match_idx(
-                    data["src_kps"], data["n_pts"], src_center
-                )
-                data["trg_kpidx"] = match_idx(
-                    data["trg_kps"], data["n_pts"], trg_center
-                )
+                data["src_kpidx"] = match_idx(data["src_kps"], data["n_pts"], src_center)
+                data["trg_kpidx"] = match_idx(data["trg_kps"], data["n_pts"], trg_center)
                 # prediction and evaluation for current loss stage
                 prd_kps = geometry.predict_kps(
-                    src["box"],
-                    trg["box"],
-                    data["src_kps"],
-                    data["n_pts"],
-                    cross_sim.detach().clone(),
+                    src["box"], trg["box"], data["src_kps"],
+                    data["n_pts"], cross_sim.detach().clone(),
                 )  # predicted points
                 eval_result = Evaluator.eval_kps_transfer(
                     prd_kps, data, args.criterion
@@ -182,23 +137,18 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             pass
         elif args.criterion == "weak":
             task_loss = criterion(
-                cross_sim,
-                src_sim,
-                trg_sim,
-                src["feats"],
-                trg["feats"],
+                cross_sim, src_sim, trg_sim,
+                src["feats"], trg["feats"],
             )
 
             discSelf_meter.update(task_loss[0].item(), bsz)
             discCross_meter.update(task_loss[1].item(), bsz)
             match_meter.update(task_loss[2].item(), bsz)
 
-            # go through the GradNorm module
             loss = (args.weak_lambda * task_loss).sum()
 
             del src_sim, trg_sim
         del cross_sim
-        gc.collect()
 
         loss_meter.update(loss.item(), bsz)
         
@@ -207,33 +157,30 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             for i in range(3):
                 # get the gradient of this task loss with respect to the shared parameters
                 GiW_t = torch.autograd.grad(
-                    task_loss[i], model.module.learner.parameters(),
-                        retain_graph=True, create_graph=False)
-                
-                
+                    task_loss[i], model.module.learner.parameters(), retain_graph=True)[0]
+                                
                 # GiW_t is tuple
                 # compute the norm
-                
-                # GW_t.append(torch.norm(GiW_t[0]).item())
-                
+                dist.barrier()     
+                dist.all_reduce(GiW_t, op=dist.ReduceOp.SUM)
+                GiW_t /= dist.get_world_size()
+                GW_t.append(torch.norm(GiW_t).item())
                 # print('gwt', GiW_t)
-                
+
                 # task_loss[i].backward(retain_graph=True)
                 # print('grad', model.module.learner.layerweight.grad)
                 # model.module.learner.layerweight.grad.zero_()
-                
-            # discSelfGrad_meter.update(GW_t[0], bsz)
-            # discCrossGrad_meter.update(GW_t[1], bsz)
-            # matchGrad_meter.update(GW_t[2], bsz)
-            # print(GW_t)
-            
+            discSelfG_meter.update(GW_t[0], bsz)
+            discCrossG_meter.update(GW_t[1], bsz)
+            matchG_meter.update(GW_t[2], bsz)
+            if args.use_wandb and dist.get_rank() == 0:
+                wandb.log({"discSelfGrad": GW_t[0], "discCrossGrad": GW_t[1], "matchGrad": GW_t[2]})
+
         # back propagation
         optimizer.zero_grad()   
         loss.backward()
         if args.use_grad_clip:
-            torch.nn.utils.clip_grad.clip_grad_value_(
-                model.parameters(), args.grad_clip
-            )
+            torch.nn.utils.clip_grad.clip_grad_value_(model.parameters(), args.grad_clip)
         optimizer.step()
         del loss
 
@@ -242,32 +189,20 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             batch_pck = 0
             src_size = (src["feats"].size()[0], src["feats"].size()[1])
             trg_size = (trg["feats"].size()[0], trg["feats"].size()[1])
-            votes = model.module.calculate_votes(
-                src["feats"],
-                trg["feats"],
-                args.epsilon,
-                args.exp2,
-                src_size,
-                trg_size,
-                src["weights"],
-                trg["weights"],
-            )
-            votes_geo = model.module.calculate_votesGeo(
-                votes, src["imsize"], trg["imsize"], src["box"], trg["box"]
-            )
+            votes, _, _ = model.module.calculate_votes(
+                src["feats"], trg["feats"], args.epsilon, args.exp2, src_size, trg_size, src["weights"], trg["weights"], False)
+            votes_geo, _, _ = model.module.calculate_votesGeo(
+                votes, None, None, src["imsize"], trg["imsize"], src["box"], trg["box"])
             prd_kps = geometry.predict_kps(
-                src["box"],
-                trg["box"],
-                data["src_kps"],
-                data["n_pts"],
-                votes_geo,
+                src["box"], trg["box"], data["src_kps"],
+                data["n_pts"], votes_geo,
             )  # predicted points
             eval_result = Evaluator.eval_kps_transfer(
                 prd_kps, data, args.criterion, pck_only=True
             )  # return dict results
             # prd_kps_list[key] = prd_kps
             batch_pck = mean(eval_result["pck"])
-            del votes, votes_geo, eval_result
+            del votes, votes_geo, eval_result, prd_kps
 
             pck_meter.update(batch_pck, bsz)
  
@@ -283,15 +218,10 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             discSelf_meter.all_reduce()
             discCross_meter.all_reduce()
             match_meter.all_reduce()
-            discSelfGrad_meter.all_reduce()
-            discCrossGrad_meter.all_reduce()
-            matchGrad_meter.all_reduce()
             if args.use_wandb and dist.get_rank() == 0:
-                wandb.log({"discSelf_loss": discSelf_meter.avg, "discCross_loss": discCross_meter.avg, "match_loss": match_meter.avg, \
-                           "discSelfGrad": discSelfGrad_meter.avg, "discCrossGrad": discCrossGrad_meter.avg, "matchGrad": matchGrad_meter.avg})
+                wandb.log({"discSelf_loss": discSelf_meter.avg, "discCross_loss": discCross_meter.avg, "match_loss": match_meter.avg})
 
         del src, trg, data
-        gc.collect()
     # torch.cuda.empty_cache()
 
     # Draw class pck
@@ -315,7 +245,7 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
         os.makedirs(weight_map_path, exist_ok=True)
         weight_pth = draw_weight_map(
             model.module.learner.layerweight.detach().clone(),
-            epoch, step, weight_map_path)
+            epoch, weight_map_path)
         if args.use_wandb:
             wandb.log({"weight_map": wandb.Image(Image.open(weight_pth).convert("RGB"))})
 
@@ -361,81 +291,36 @@ def validate(args, model, criterion, dataloader, epoch, aux_val_loader=None):
                 assert args.loss_stage in ["sim", "sim_geo", "votes", "votes_geo",], "Unknown loss stage"
                 cross_sim, src_sim, trg_sim = 0, 0, 0
                 if "sim" in args.loss_stage:
-                    cross_sim = model.module.calculate_sim(src["feats"], trg["feats"])
-                    if args.criterion == "weak":
-                        src_sim = model.module.calculate_sim(src["feats"], src["feats"])
-                        trg_sim = model.module.calculate_sim(trg["feats"], trg["feats"])
+                    cross_sim, src_sim, trg_sim = model.module.calculate_sim(src["feats"], trg["feats"], weak_mode)
 
                 if "votes" in args.loss_stage:
                     src_size = (src["feats"].size()[0], src["feats"].size()[1])
                     trg_size = (trg["feats"].size()[0], trg["feats"].size()[1])
-                    cross_sim = model.module.calculate_votes(
-                        src["feats"],
-                        trg["feats"],
-                        args.epsilon,
-                        args.exp2,
-                        src_size,
-                        trg_size,
-                        src["weights"],
-                        trg["weights"],
-                    )
-                    if args.criterion == "weak":
-                        src_sim = model.module.calculate_votes(
-                            src["feats"],
-                            src["feats"],
-                            args.epsilon,
-                            args.exp2,
-                            src_size,
-                            src_size,
-                            src["weights"],
-                            src["weights"],
-                        )
-                        trg_sim = model.module.calculate_votes(
-                            trg["feats"],
-                            trg["feats"],
-                            args.epsilon,
-                            args.exp2,
-                            trg_size,
-                            trg_size,
-                            trg["weights"],
-                            trg["weights"],
-                        )
+                    cross_sim, src_sim, trg_sim = model.module.calculate_votes(
+                        src["feats"], trg["feats"], args.epsilon, args.exp2, src_size, trg_size, src["weights"], trg["weights"], weak_mode)
+
                 if "geo" in args.loss_stage:
                     cross_sim = model.module.calculate_votesGeo(
-                        cross_sim, src["imsize"], trg["imsize"], src["box"], trg["box"]
+                        cross_sim, src_sim, trg_sim, src["imsize"], trg["imsize"], src["box"], trg["box"]
                     )
-                    if args.criterion == "weak":
-                        src_sim = model.module.calculate_votesGeo(
-                            src_sim, src["imsize"], src["imsize"], src["box"], src["box"]
-                        )
-                        trg_sim = model.module.calculate_votesGeo(
-                            trg_sim, trg["imsize"], trg["imsize"], trg["box"], trg["box"]
-                        )
 
                 # 3. calculate loss
                 src_center = 0
                 trg_center = 0
                 if args.criterion == "strong_ce":
-                    with torch.no_grad():
-                        src_center = geometry.center(src["box"])
-                        trg_center = geometry.center(trg["box"])
-                        data["src_kpidx"] = match_idx(
-                            data["src_kps"], data["n_pts"], src_center
-                        )
-                        data["trg_kpidx"] = match_idx(
-                            data["trg_kps"], data["n_pts"], trg_center
-                        )
-                        # prediction and evaluation for current loss stage
-                        prd_kps = geometry.predict_kps(
-                            src["box"],
-                            trg["box"],
-                            data["src_kps"],
-                            data["n_pts"],
-                            cross_sim.detach().clone(),
-                        )  # predicted points
-                        eval_result = Evaluator.eval_kps_transfer(
-                            prd_kps, data, args.criterion
-                        )  # return dict results
+                    
+                    src_center = geometry.center(src["box"])
+                    trg_center = geometry.center(trg["box"])
+                    data["src_kpidx"] = match_idx(data["src_kps"], data["n_pts"], src_center)
+                    data["trg_kpidx"] = match_idx(data["trg_kps"], data["n_pts"], trg_center)
+                    # prediction and evaluation for current loss stage
+                    prd_kps = geometry.predict_kps(
+                        src["box"], trg["box"], data["src_kps"],
+                        data["n_pts"], cross_sim.detach().clone(),
+                    )  # predicted points
+                    eval_result = Evaluator.eval_kps_transfer(
+                        prd_kps, data, args.criterion
+                    )  # return dict results
                     loss = criterion(
                         cross_sim, eval_result['easy_match'], eval_result['hard_match'], data["pckthres"], data["n_pts"]
                     )
@@ -444,24 +329,14 @@ def validate(args, model, criterion, dataloader, epoch, aux_val_loader=None):
                     pass
                 elif args.criterion == "weak":
                     task_loss = criterion(
-                        cross_sim,
-                        src_sim,
-                        trg_sim,
-                        src["feats"],
-                        trg["feats"],
+                        cross_sim, src_sim, trg_sim,
+                        src["feats"], trg["feats"],
                     )
 
-                    # discSelf_meter.update(task_loss[0].item(), bsz)
-                    # discCross_meter.update(task_loss[1].item(), bsz)
-                    # match_meter.update(task_loss[2].item(), bsz)
-
-                    # go through the GradNorm module
-                    if args.criterion == 'weak' and args.weak_mode == 'grad_norm':
-                        loss = (model.module.gradNorm.w.data * task_loss).sum()
-                    else:
-                        loss = (args.weak_lambda * task_loss).sum()
+                    loss = (args.weak_lambda * task_loss).sum()
                 
                     del src_sim, trg_sim
+                del cross_sim
 
                 loss_meter.update(loss.item(), bsz)
                 del loss
@@ -470,51 +345,31 @@ def validate(args, model, criterion, dataloader, epoch, aux_val_loader=None):
                 batch_pck = 0
                 src_size = (src["feats"].size()[0], src["feats"].size()[1])
                 trg_size = (trg["feats"].size()[0], trg["feats"].size()[1])
-                votes = model.module.calculate_votes(
-                    src["feats"],
-                    trg["feats"],
-                    args.epsilon,
-                    args.exp2,
-                    src_size,
-                    trg_size,
-                    src["weights"],
-                    trg["weights"],
-                )
-                votes_geo = model.module.calculate_votesGeo(
-                    votes, src["imsize"], trg["imsize"], src["box"], trg["box"]
-                )
+                votes, _, _ = model.module.calculate_votes(
+                    src["feats"], trg["feats"], args.epsilon, args.exp2, src_size, trg_size, src["weights"], trg["weights"], False)
+                votes_geo, _, _ = model.module.calculate_votesGeo(
+                    votes, None, None, src["imsize"], trg["imsize"], src["box"], trg["box"])
                 prd_kps = geometry.predict_kps(
-                    src["box"],
-                    trg["box"],
-                    data["src_kps"],
-                    data["n_pts"],
-                    votes_geo,
+                    src["box"], trg["box"], data["src_kps"],
+                    data["n_pts"], votes_geo,
                 )  # predicted points
                 eval_result = Evaluator.eval_kps_transfer(
                     prd_kps, data, args.criterion, pck_only=True
                 )  # return dict results
                 # prd_kps_list[key] = prd_kps
                 batch_pck = mean(eval_result["pck"])
-                del votes, votes_geo, eval_result
+                del votes, votes_geo, eval_result, prd_kps
 
                 pck_meter.update(batch_pck, bsz)
    
-                del batch_pck, data
-
-            del src, trg
-            torch.cuda.empty_cache()
+                del batch_pck, data, src, trg
 
     loss_meter = NewAverageMeter('loss', ':4.2f')
     pck_meter = NewAverageMeter('pck', ':4.2f')
     progress_list = [loss_meter, pck_meter]
-    # if args.criterion == "weak":
-    #     discSelf_meter = NewAverageMeter('discSelf_loss', ':4.2f')
-    #     discCross_meter = NewAverageMeter('discCross_loss', ':4.2f') 
-    #     match_meter = NewAverageMeter('match_loss', ':4.2f') 
-    #     progress_list.append(discSelf_meter, discCross_meter, match_meter)
     progress = ProgressMeter(
         len(dataloader) + (args.distributed and (len(dataloader.sampler) * args.world_size < len(dataloader.dataset))), 
-        progress_list, prefix="TestEpoch[{}]: ".format(epoch))
+        progress_list, prefix="Test[{}]: ".format(epoch))
 
     # switch to evaluate mode
     model.module.backbone.eval()
@@ -522,25 +377,20 @@ def validate(args, model, criterion, dataloader, epoch, aux_val_loader=None):
 
     run_validate(dataloader)
 
+    dist.barrier()
     loss_meter.all_reduce()
     pck_meter.all_reduce()
 
-    # if args.criterion == "weak":
-    #     discSelf_meter.all_reduce()
-    #     discCross_meter.all_reduce
-    #     match_meter.all_reduce
-
     if aux_val_loader is not None:
         run_validate(aux_val_loader, len(dataloader))
-    dist.barrier()
 
+    dist.barrier()
     progress.display_summary()
 
     avg_loss = loss_meter.avg
     avg_pck = pck_meter.avg
 
     return avg_loss, avg_pck
-
 
 def init_distributed_mode(args):
     """init for distribute mode"""
@@ -809,12 +659,6 @@ def main(args):
     fix_randseed(seed=(0))
     cudnn.benchmark = False
     cudnn.deterministic = True
-    # if rank == 0:
-    #     warnings.warn('You have chosen to seed training. '
-    #                         'This will turn on the CUDNN deterministic setting, '
-    #                         'which can slow down your training considerably! '
-    #                         'You may see unexpected behavior when restarting '
-    #                         'from checkpoints.\n')
     
     # ============ 2. Make Dataloader ... ============
     train_loader, val_loader, aux_val_loader = build_dataloader(args, rank, world_size)
@@ -851,14 +695,14 @@ def main(args):
         output_device=args.local_rank,
         find_unused_parameters=False,
     )
-    model_without_ddp = model.module
-
+    
     # check # of training params
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
     Logger.info(f">>>>>>>>>> number of training params: {n_parameters}")
 
     # resume the model
     if args.resume:
+        model_without_ddp = model.module
         max_pck = load_checkpoint(args, model_without_ddp, optimizer, lr_scheduler)
     else:
         max_pck = 0.0
@@ -889,10 +733,6 @@ def main(args):
         log_benchmark["val_loss"] = val_loss
         log_benchmark["val_pck"] = val_pck
         end_val_time = (time.time()-start_time)/60
-        
-        # save_e = 1 if args.split == "trnval" else 5
-        # if (epoch%save_e)==0:
-        #     Logger.save_epoch(model, epoch, model_pck["votes_geo"])
 
         # save model and log results
         if val_pck > max_pck and rank == 0:
@@ -906,7 +746,7 @@ def main(args):
             wandb.log(log_benchmark)
             
         time_message = (
-            ">>>>>>>>>> Train/Eval %d epochs took:%4.3f + %4.3f = %4.3f"%(epoch + 1, end_train_time, end_val_time, end_train_time+end_val_time)+" minutes"
+            ">>>>> Train/Eval %d epochs took:%4.3f + %4.3f = %4.3f"%(epoch + 1, end_train_time, end_val_time, end_train_time+end_val_time)+" minutes"
         )
         Logger.info(time_message)
         if epoch%2 == 0:

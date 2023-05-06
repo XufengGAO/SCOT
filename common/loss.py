@@ -87,7 +87,6 @@ class WeakDiscMatchLoss(nn.Module):
 
         score_net = ((src_ent + trg_ent).mean(dim=1) / 2)
         del src_ent, trg_ent, src_pdf, trg_pdf, correlation_matrix
-        gc.collect()
         
         return score_net
     
@@ -103,7 +102,7 @@ class WeakDiscMatchLoss(nn.Module):
 
         match_loss = 0.5 * (src2trg_dist.norm(dim=(1)).mean(dim=1) + trg2src_dist.norm(dim=(1)).mean(dim=1))
         del src_feats, trg_feats, src2trg_dist, trg2src_dist
-        gc.collect()
+
         return match_loss
 
 

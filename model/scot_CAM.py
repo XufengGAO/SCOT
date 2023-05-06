@@ -12,7 +12,7 @@ import torch.nn as nn
 from .gating import DynamicFeatureSelection, GradNorm
 from .base.geometry import Geometry
 import numpy as np
-import gc
+
 class SCOT_CAM(nn.Module):
     r"""SCOT framework"""
     def __init__(self, args, hyperpixels):
@@ -66,7 +66,7 @@ class SCOT_CAM(nn.Module):
             self.rfsz = torch.tensor([11, 19, 27, 35, 43, 59, 75, 91, 107, 139])
 
         # Miscellaneous
-        self.hsfilter = geometry.gaussian2d(7)
+        self.hsfilter = geometry.gaussian2d(7).unsqueeze(0).unsqueeze(0).cuda()
         self.benchmark = args.benchmark
 
         # weighted module
@@ -76,13 +76,6 @@ class SCOT_CAM(nn.Module):
         self.relu = nn.ReLU(inplace=True)
 
         self.select_all = args.select_all
-
-        # gradNorm module        
-        #self.gradNorm = GradNorm(args.weak_lambda, args.weak_mode)
-        if args.criterion == 'weak' and args.weak_mode == 'grad_norm':
-            self.gradNorm = GradNorm(num_of_task=3, alpha=args.weak_alpha)
-
-
 
 
     def forward(self, src_img, trg_img, classmap, src_mask, trg_mask, backbone, model_stage="train"):
@@ -107,67 +100,91 @@ class SCOT_CAM(nn.Module):
         return src, trg
 
 
-    def calculate_sim(self, src_feats, trg_feats):
+    def calculate_sim(self, src_feats, trg_feats, weak_mode=False):
         src_feats = src_feats / (torch.norm(src_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10) # normalized features
         trg_feats = trg_feats / (torch.norm(trg_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10)
 
-        sim = self.relu(torch.bmm(src_feats, trg_feats.transpose(1, 2))) # cross-sim, source->target
+        cross_sim = self.relu(torch.bmm(src_feats, trg_feats.transpose(1, 2))) # cross-sim, source->target
+        
+        if weak_mode:
+            src_sim = self.relu(torch.bmm(src_feats, src_feats.transpose(1, 2)))
+            trg_sim = self.relu(torch.bmm(trg_feats, trg_feats.transpose(1, 2)))   
+        else:
+            src_sim = None
+            trg_sim = None         
+    
         del src_feats, trg_feats
-        gc.collect()
-        return sim
 
-    def calculate_votes(self, src_feats, trg_feats, epsilon, exp2, src_size, trg_size, src_weights=None, trg_weights=None):
-        src_feats = src_feats / (torch.norm(src_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10) # normalized features
-        trg_feats = trg_feats / (torch.norm(trg_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10)
+        return cross_sim, src_sim, trg_sim
 
-        sim = self.relu(torch.bmm(src_feats, trg_feats.transpose(1, 2))) # cross-sim, source->target
-
-        costs = 1 - sim
-
-        if src_weights is not None:
-            mus = src_weights / src_weights.sum(dim=1).unsqueeze(-1) # normalize weights
+    def calculate_votes(self, src_feats, trg_feats, epsilon, exp2, src_size, trg_size, src_weights=None, trg_weights=None, weak_mode=False):
+        cross_sim, src_sim, trg_sim = self.calculate_sim(src_feats, trg_feats, weak_mode)
+        cross_votes = self.optimal_matching(cross_sim, epsilon, exp2, src_size, trg_size, src_weights, trg_weights)
+        if weak_mode:
+            src_votes = self.optimal_matching(src_sim, epsilon, exp2, src_size, src_size, src_weights, src_weights)
+            trg_votes = self.optimal_matching(trg_sim, epsilon, exp2, trg_size, trg_size, trg_weights, trg_weights)
         else:
-            mus = (torch.ones((src_size[0],src_size[1]))/src_size[1])
+            src_votes = None
+            trg_votes = None
 
-        if trg_weights is not None:
-            nus = trg_weights / trg_weights.sum(dim=1).unsqueeze(-1)
-        else:
-            nus = (torch.ones((src_size[0],trg_size[1]))/trg_size[1])
+        return cross_votes, src_votes, trg_votes
 
-        del src_weights, trg_weights
-        gc.collect()
+    def optimal_matching(self, sim, epsilon, exp2, src_size, trg_size, src_weights=None, trg_weights=None):
+            costs = 1 - sim
 
-        ## ---- <Run Optimal Transport Algorithm> ----
-        cnt = 0
-        votes = []
-        for cost, mu, nu in zip(costs, mus, nus):
-            while True: # see Algorithm 1
-                # PI is optimal transport plan or transport matrix.
-                PI = rhm_map.perform_sinkhorn2(cost, epsilon, mu.unsqueeze(-1), nu.unsqueeze(-1)) # 4x4096x4096
-                
-                if not torch.isnan(PI).any():
-                    if cnt>0:
-                        print(cnt)
-                    break
-                else: # Nan encountered caused by overflow issue is sinkhorn
-                    epsilon *= 2.0
-                    #print(epsilon)
-                    cnt += 1
+            if src_weights is not None:
+                mus = src_weights / src_weights.sum(dim=1).unsqueeze(-1) # normalize weights
+            else:
+                mus = (torch.ones((src_size[0],src_size[1]))/src_size[1])
 
-            #exp2 = 1.0 for spair-71k, TSS
-            #exp2 = 0.5 # for pf-pascal and pfwillow
-            PI = torch.pow(self.relu(src_size[1]*PI), exp2)
+            if trg_weights is not None:
+                nus = trg_weights / trg_weights.sum(dim=1).unsqueeze(-1)
+            else:
+                nus = (torch.ones((src_size[0],trg_size[1]))/trg_size[1])
 
-            votes.append(PI.unsqueeze(0))
-        del mus, nus, src_feats, trg_feats, sim, costs
-        gc.collect()
+            del src_weights, trg_weights
 
-        votes = torch.cat(votes, dim=0)
+            ## ---- <Run Optimal Transport Algorithm> ----
+            cnt = 0
+            votes = []
+            for cost, mu, nu in zip(costs, mus, nus):
+                while True: # see Algorithm 1
+                    # PI is optimal transport plan or transport matrix.
+                    PI = rhm_map.perform_sinkhorn2(cost, epsilon, mu.unsqueeze(-1), nu.unsqueeze(-1)) # 4x4096x4096
+                    
+                    if not torch.isnan(PI).any():
+                        if cnt>0:
+                            print(cnt)
+                        break
+                    else: # Nan encountered caused by overflow issue is sinkhorn
+                        epsilon *= 2.0
+                        #print(epsilon)
+                        cnt += 1
 
-        return votes
+                #exp2 = 1.0 for spair-71k, TSS
+                #exp2 = 0.5 # for pf-pascal and pfwillow
+                PI = torch.pow(self.relu(src_size[1]*PI), exp2)
 
-    def calculate_votesGeo(self, votes, src_imsize, trg_imsize, src_box, trg_box):
-        # 6. rhm
+                votes.append(PI.unsqueeze(0))
+
+            del mus, nus, sim, costs, PI
+
+            votes = torch.cat(votes, dim=0)
+
+            return votes
+
+    def calculate_votesGeo(self, cross_votes, src_votes, trg_votes, src_imsize, trg_imsize, src_box, trg_box):
+        
+        cross_votes_geo = self.rhm(cross_votes, src_imsize, trg_imsize, src_box, trg_box)
+        src_votes_geo, trg_votes_geo = None, None
+        if src_votes is not None:
+            src_votes_geo = self.rhm(src_votes, src_imsize, src_imsize, src_box, src_box)
+        if trg_votes is not None:
+            trg_votes_geo = self.rhm(trg_votes, trg_imsize, trg_imsize, trg_box, trg_box)        
+
+        return cross_votes_geo, src_votes_geo, trg_votes_geo
+    
+    def rhm(self, votes, src_imsize, trg_imsize, src_box, trg_box):
         with torch.no_grad():
             ncells = 8192
             geometric_scores = []
@@ -182,18 +199,16 @@ class SCOT_CAM(nn.Module):
                 new_hspace = torch.sum(new_hspace, dim=0).to(votes.device)
 
                 # Aggregate the voting results
-                new_hspace = F.conv2d(new_hspace.view(1, 1, nbins_y, nbins_x),
-                                self.hsfilter.to(votes.device).unsqueeze(0).unsqueeze(0), padding=3).view(-1)
+                new_hspace = F.conv2d(new_hspace.view(1, 1, nbins_y, nbins_x), self.hsfilter, padding=3).view(-1)
 
                 geometric_scores.append((torch.index_select(new_hspace, dim=0, index=bin_ids.view(-1)).view_as(vote)).unsqueeze(0))
 
             geometric_scores = torch.cat(geometric_scores, dim=0)
 
-        votes_geo = votes * geometric_scores
-        del nbins_x, nbins_y, hs_cellsize, bin_ids, hspace, hbin_ids, new_hspace, votes
-        gc.collect()
+        votes *= geometric_scores
+        del nbins_x, nbins_y, hs_cellsize, bin_ids, hspace, hbin_ids, new_hspace, geometric_scores
         
-        return votes_geo
+        return votes
 
     def extract_cam(self, img, backbone='resnet101'):
         self.hyperpixels = []
@@ -243,7 +258,6 @@ class SCOT_CAM(nn.Module):
                     mask = self.get_CAM_multi(img, feat_map, fc, sz=(img.size(2),img.size(3)), top_k=2)                 
             scale = 1.0
             del feat_map, fc
-            gc.collect()
             
             hpos = geometry.center(hpgeometry) # 4096 2
             # print("hpos", hpos.size(), hpos[:], Geometry.rf_center.size(), Geometry.rf_center[:])
@@ -258,7 +272,6 @@ class SCOT_CAM(nn.Module):
             weights[hselect>0.6*scale] = 1.0
 
             del hpos, hselect
-            gc.collect()
             
         # print('no-clasmap', weights.size())
         # print(img.size())
@@ -267,7 +280,7 @@ class SCOT_CAM(nn.Module):
         
         results = {'box':hpgeometry, 'feats':hyperfeats, 'imsize':img.size()[2:][::-1], 'weights':weights}
         del hpgeometry, hyperfeats, weights
-        gc.collect()
+
         return results
 
     def extract_intermediate_feat(self, img, return_hp=True, backbone='resnet101'):
@@ -287,6 +300,7 @@ class SCOT_CAM(nn.Module):
         with torch.no_grad():
             # Layer 0
             feat = self.backbone.conv1.forward(img)
+            del img
             feat = self.backbone.bn1.forward(feat)
             feat = self.backbone.relu.forward(feat)
             feat = self.backbone.maxpool.forward(feat)
@@ -437,7 +451,6 @@ class SCOT_CAM(nn.Module):
             map_list.append(output_cam)
 
             del output_cam, cam
-            gc.collect()
 
         map_list = torch.stack(map_list,dim=0) # 3xBx240x240
         sum_cam = map_list.sum(dim=0) # Bx240x240
@@ -450,7 +463,6 @@ class SCOT_CAM(nn.Module):
         #     file_name = "{}".format(idx)
         #     imgm.save("/home/xufeng/Documents/EPFL_Course/sp_code/SCOT/img/{}.png".format(file_name))
         del map_list, sum_cam, sum_cam_max
-        gc.collect()
 
         return norm_cam
 
