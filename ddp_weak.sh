@@ -4,7 +4,7 @@
 benchmark="pfpascal"
 backbone="resnet101"
 nnodes=4
-master_addr="10.233.114.222"
+master_addr="10.233.114.179"
 master_port=12363
 
 # CUDA_VISIBLE_DEVICES=0 \
@@ -17,9 +17,8 @@ python3 -m torch.distributed.launch --master_port=${master_port} --nproc_per_nod
                                     --weight_thres 0.10 \
                                     --select_all 0.90 \
                                     --criterion 'weak'\
-                                    --temp 0.05 \
+                                    --temp 1.0 \
                                     --weak_lambda '[1.0, 1.0, 1.0]' \
-                                    --weak_mode 'custom_lambda' \
                                     --match_norm_type 'l1' \
                                     --alpha 0.1 \
                                     --lr 0.003 \
