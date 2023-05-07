@@ -679,7 +679,7 @@ def main(args):
     optimizer = build_optimizer(args, model)
     lr_scheduler = build_scheduler(args, optimizer, len(train_loader), config=None)
     if args.criterion == "weak":
-        criterion = WeakDiscMatchLoss(args.temp, args.match_norm_type, args.weak_lambda)
+        criterion = WeakDiscMatchLoss(args.temp, args.match_norm_type)
     elif args.criterion == "strong_ce":
         criterion = StrongCrossEntropyLoss(args.alpha)
     elif args.criterion == "flow":

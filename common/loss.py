@@ -8,7 +8,7 @@ import numpy as np
 from model.objective import Objective
 import torch.nn.functional as F
 from .norm import unit_gaussian_normalize, l1normalize, linearnormalize
-import re
+import gc
 class StrongCrossEntropyLoss(nn.Module):
     r"""Strongly-supervised cross entropy loss"""
     def __init__(self, alpha=0.1) -> None:
@@ -52,32 +52,20 @@ class StrongCrossEntropyLoss(nn.Module):
     
 class WeakDiscMatchLoss(nn.Module):
     r"""Weakly-supervised discriminative and maching loss"""
-    def __init__(self, temp=1.0,  match_norm_type='l1', weak_lambda=None) -> None:
+    def __init__(self, temp=1.0,  match_norm_type='l1') -> None:
         super(WeakDiscMatchLoss, self).__init__()
         self.softmax = torch.nn.Softmax(dim=1)
         self.eps = 1e-30
         self.temp = temp
         self.match_norm_type = match_norm_type
-        weak_lambda = list(map(float, re.findall(r"[-+]?(?:\d*\.*\d+)", weak_lambda)))
-        self.weak_lambda = [i>0.0 for i in weak_lambda]
 
     def forward(self, x_cross: torch.Tensor, x_src: torch.Tensor, x_trg: torch.Tensor, src_feats: torch.Tensor, trg_feats: torch.Tensor) -> torch.Tensor:
-
-        if self.weak_lambda[0]:
-            discSelf_loss = 0.5*(self.information_entropy(x_src, self.match_norm_type) + self.information_entropy(x_trg, self.match_norm_type))
-        else:
-            discSelf_loss = torch.zeros(1).cuda()
-
-        if self.weak_lambda[1]:
-            discCross_loss = self.information_entropy(x_cross, self.match_norm_type)
-        else:
-            discCross_loss = torch.zeros(1).cuda()
-
-        if self.weak_lambda[2]:
-            match_loss = self.information_match(x_cross, src_feats, trg_feats)
-        else:
-            match_loss = torch.zeros(1).cuda()
-            
+        
+        discSelf_loss = 0.5*(self.information_entropy(x_src, self.match_norm_type) + self.information_entropy(x_trg, self.match_norm_type))
+        discCross_loss = self.information_entropy(x_cross, self.match_norm_type)
+        match_loss = self.information_match(x_cross, src_feats, trg_feats)
+   
+        # match_loss = torch.zeros(1).to(x_cross.device)
         
         task_loss = torch.stack([discSelf_loss.mean(), discCross_loss.mean(), match_loss.mean()])
         return task_loss
