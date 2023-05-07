@@ -152,7 +152,7 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
 
         loss_meter.update(loss.item(), bsz)
         
-        if args.criterion == "weak":
+        if args.criterion == "weak" and (step%10 == 0):
             GW_t = []
             for i in range(3):
                 # get the gradient of this task loss with respect to the shared parameters
@@ -170,6 +170,7 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
                 # task_loss[i].backward(retain_graph=True)
                 # print('grad', model.module.learner.layerweight.grad)
                 # model.module.learner.layerweight.grad.zero_()
+            del GiW_t
             discSelfG_meter.update(GW_t[0], bsz)
             discCrossG_meter.update(GW_t[1], bsz)
             matchG_meter.update(GW_t[2], bsz)
@@ -290,6 +291,7 @@ def validate(args, model, criterion, dataloader, epoch, aux_val_loader=None):
                 # 2. calculate sim
                 assert args.loss_stage in ["sim", "sim_geo", "votes", "votes_geo",], "Unknown loss stage"
                 cross_sim, src_sim, trg_sim = 0, 0, 0
+                weak_mode = True if args.criterion == "weak" else False
                 if "sim" in args.loss_stage:
                     cross_sim, src_sim, trg_sim = model.module.calculate_sim(src["feats"], trg["feats"], weak_mode)
 
@@ -619,16 +621,13 @@ def build_wandb(args, rank):
         wandb.define_metric("val_pck", step_metric="epochs")
 
         if args.criterion == "weak":
-            wandb.define_metric("disc_grad", step_metric="iters")
-            wandb.define_metric("match_grad", step_metric="iters")
             wandb.define_metric("discSelf_loss", step_metric="iters")
             wandb.define_metric("discCross_loss", step_metric="iters")
             wandb.define_metric("match_loss", step_metric="iters")
-
-            if args.weak_mode == 'grad_norm':
-                wandb.define_metric("discSelfGrad", step_metric="iters")
-                wandb.define_metric("discCrossGrad", step_metric="iters")
-                wandb.define_metric("matchGrad", step_metric="iters")                
+       
+            wandb.define_metric("discSelfGrad", step_metric="iters")
+            wandb.define_metric("discCrossGrad", step_metric="iters")
+            wandb.define_metric("matchGrad", step_metric="iters")                
 
 def save_checkpoint(args, epoch, model, max_pck, optimizer, lr_scheduler):
 

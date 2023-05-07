@@ -110,7 +110,7 @@ def draw_class_pck(sel_buffer, class_pck_path, epoch=0, step=0):
     
     return class_pth
 
-def draw_weight_map(weight, epoch, step, weight_map_path):
+def draw_weight_map(weight, epoch, weight_map_path):
 
     num_weight = weight.numel()
     pad_width = 20 if num_weight == 17 else 35
@@ -137,10 +137,10 @@ def draw_weight_map(weight, epoch, step, weight_map_path):
             text = ax.text(j, i, "%.3f"%pad_weight[i, j].item(),
                         ha="center", va="center", color="w")
 
-    ax.set_title("Sigmoid weight, epoch={}, step={}".format(epoch, step))
+    ax.set_title("Sigmoid weight, epoch={}".format(epoch))
     fig.tight_layout()
 
-    weight_pth = os.path.join(weight_map_path, "e{}_s{}.png".format(epoch, step))
+    weight_pth = os.path.join(weight_map_path, "e{}.png".format(epoch))
 
     fig.savefig(weight_pth)
     plt.close('all')
