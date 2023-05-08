@@ -596,10 +596,7 @@ def build_wandb(args, rank):
         wandb_name += "_bsz%d" % (args.batch_size)
 
         if args.criterion == 'weak':
-            if args.weak_mode == 'custom_lambda':
-                wandb_name += ("_%s"%(args.weak_lambda))
-            else:
-                wandb_name += ("_%.2f"%(args.weak_alpha))
+            wandb_name += ("_%s_tp%.2f"%(args.weak_lambda, args.temp))
 
         _wandb = wandb.init(
             project=args.wandb_proj,
@@ -679,7 +676,7 @@ def main(args):
     optimizer = build_optimizer(args, model)
     lr_scheduler = build_scheduler(args, optimizer, len(train_loader), config=None)
     if args.criterion == "weak":
-        criterion = WeakDiscMatchLoss(args.temp, args.match_norm_type)
+        criterion = WeakDiscMatchLoss(args.temp, args.match_norm_type, args.weak_lambda)
     elif args.criterion == "strong_ce":
         criterion = StrongCrossEntropyLoss(args.alpha)
     elif args.criterion == "flow":
@@ -736,7 +733,7 @@ def main(args):
         # save model and log results
         if val_pck > max_pck and rank == 0:
             # Logger.save_model(model.module, epoch, val_pck, max_pck)
-            save_checkpoint(args, epoch, model, max_pck, optimizer, lr_scheduler)
+            # save_checkpoint(args, epoch, model, max_pck, optimizer, lr_scheduler)
             Logger.info('Best Model saved @%d w/ val. PCK: %5.4f -> %5.4f on [%s]\n' % (epoch, max_pck, val_pck, os.path.join(args.logpath, f'ckpt_epoch_{epoch}.pth')))
             max_pck = val_pck
 
@@ -810,9 +807,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--match_norm_type", type=str, default="l1", choices=["l1", "linear", "softmax"])
     parser.add_argument('--weak_lambda', type=str, default='[1.0, 1.0, 1.0]')
-    parser.add_argument('--weak_mode', default='custom_lambda', choices=['grad_norm', 'custom_lambda'])
     parser.add_argument('--temp', type=float, default=0.05, help='softmax-temp for match loss')
-    parser.add_argument('--weak_alpha', type=float, default=0.12)
 
 
     # Arguments for distributed data parallel

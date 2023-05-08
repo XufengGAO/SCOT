@@ -733,7 +733,7 @@ def main(args):
         # save model and log results
         if val_pck > max_pck and rank == 0:
             # Logger.save_model(model.module, epoch, val_pck, max_pck)
-            save_checkpoint(args, epoch, model, max_pck, optimizer, lr_scheduler)
+            # save_checkpoint(args, epoch, model, max_pck, optimizer, lr_scheduler)
             Logger.info('Best Model saved @%d w/ val. PCK: %5.4f -> %5.4f on [%s]\n' % (epoch, max_pck, val_pck, os.path.join(args.logpath, f'ckpt_epoch_{epoch}.pth')))
             max_pck = val_pck
 
