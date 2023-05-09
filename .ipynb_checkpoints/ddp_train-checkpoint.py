@@ -43,11 +43,12 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
         discCross_meter = NewAverageMeter('Crossloss', ':4.2f') 
         match_meter = NewAverageMeter('matchloss', ':4.2f') 
         progress_list += [discSelf_meter, discCross_meter, match_meter]
-
-        discSelfG_meter = NewAverageMeter('SelfG', ':4.2f', summary_type=Summary.VAL)
-        discCrossG_meter = NewAverageMeter('CrossG', ':4.2f', summary_type=Summary.VAL) 
-        matchG_meter = NewAverageMeter('matchG', ':4.2f', summary_type=Summary.VAL) 
-        progress_list += [discSelfG_meter, discCrossG_meter, matchG_meter]
+        
+        if args.collect_grad:
+            discSelfG_meter = NewAverageMeter('SelfG', ':4.2f', summary_type=Summary.VAL)
+            discCrossG_meter = NewAverageMeter('CrossG', ':4.2f', summary_type=Summary.VAL) 
+            matchG_meter = NewAverageMeter('matchG', ':4.2f', summary_type=Summary.VAL) 
+            progress_list += [discSelfG_meter, discCrossG_meter, matchG_meter]
 
     progress = ProgressMeter(len(dataloader), progress_list, prefix="Epoch[{}]".format(epoch))
 
@@ -152,7 +153,7 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
 
         loss_meter.update(loss.item(), bsz)
         
-        if args.criterion == "weak" and (step%10 == 0):
+        if args.criterion == "weak" and (step%10 == 0) and args.collect_grad:
             GW_t = []
             for i in range(3):
                 # get the gradient of this task loss with respect to the shared parameters
@@ -213,15 +214,6 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
         if (step % 50 == 0) and dist.get_rank() == 0:
             progress.display(step+1)
 
-        # 7. collect gradients
-        if args.criterion == "weak" and (step % 100 == 0):
-            dist.barrier()
-            discSelf_meter.all_reduce()
-            discCross_meter.all_reduce()
-            match_meter.all_reduce()
-            if args.use_wandb and dist.get_rank() == 0:
-                wandb.log({"discSelf_loss": discSelf_meter.avg, "discCross_loss": discCross_meter.avg, "match_loss": match_meter.avg})
-
         del src, trg, data
     # torch.cuda.empty_cache()
 
@@ -254,7 +246,13 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
     # 3. log epoch loss, epoch pck
     loss_meter.all_reduce()
     pck_meter.all_reduce() 
-
+    # 7. collect gradients
+    if args.criterion == "weak":
+        discSelf_meter.all_reduce()
+        discCross_meter.all_reduce()
+        match_meter.all_reduce()
+        if args.use_wandb and dist.get_rank() == 0:
+            wandb.log({"discSelf_loss": discSelf_meter.avg, "discCross_loss": discCross_meter.avg, "match_loss": match_meter.avg})
     
     return loss_meter.avg, pck_meter.avg
 
@@ -618,13 +616,14 @@ def build_wandb(args, rank):
         wandb.define_metric("val_pck", step_metric="epochs")
 
         if args.criterion == "weak":
-            wandb.define_metric("discSelf_loss", step_metric="iters")
-            wandb.define_metric("discCross_loss", step_metric="iters")
-            wandb.define_metric("match_loss", step_metric="iters")
-       
-            wandb.define_metric("discSelfGrad", step_metric="iters")
-            wandb.define_metric("discCrossGrad", step_metric="iters")
-            wandb.define_metric("matchGrad", step_metric="iters")                
+            wandb.define_metric("discSelf_loss", step_metric="epochs")
+            wandb.define_metric("discCross_loss", step_metric="epochs")
+            wandb.define_metric("match_loss", step_metric="epochs")
+            
+            if args.collect_grad:
+                wandb.define_metric("discSelfGrad", step_metric="iters")
+                wandb.define_metric("discCrossGrad", step_metric="iters")
+                wandb.define_metric("matchGrad", step_metric="iters")                
 
 def save_checkpoint(args, epoch, model, max_pck, optimizer, lr_scheduler):
 
@@ -808,6 +807,7 @@ if __name__ == "__main__":
     parser.add_argument("--match_norm_type", type=str, default="l1", choices=["l1", "linear", "softmax"])
     parser.add_argument('--weak_lambda', type=str, default='[1.0, 1.0, 1.0]')
     parser.add_argument('--temp', type=float, default=0.05, help='softmax-temp for match loss')
+    parser.add_argument("--collect_grad", type= boolean_string, nargs="?", default=False)
 
 
     # Arguments for distributed data parallel
