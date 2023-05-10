@@ -102,15 +102,15 @@ class SCOT_CAM(nn.Module):
         return src, trg
 
 
-    def calculate_sim(self, src_feats, trg_feats, weak_mode=False):
+    def calculate_sim(self, src_feats, trg_feats, weak_mode=False, bsz=1):
         src_feats = src_feats / (torch.norm(src_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10) # normalized features
         trg_feats = trg_feats / (torch.norm(trg_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10)
 
         cross_sim = self.relu(torch.bmm(src_feats, trg_feats.transpose(1, 2))) # cross-sim, source->target
         
         if weak_mode:
-            src_sim = self.relu(torch.bmm(src_feats, src_feats.transpose(1, 2)))
-            trg_sim = self.relu(torch.bmm(trg_feats, trg_feats.transpose(1, 2)))   
+            src_sim = self.relu(torch.bmm(src_feats[:bsz], src_feats[:bsz].transpose(1, 2)))
+            trg_sim = self.relu(torch.bmm(trg_feats[:bsz], trg_feats[:bsz].transpose(1, 2)))   
         else:
             src_sim = None
             trg_sim = None         
@@ -119,8 +119,8 @@ class SCOT_CAM(nn.Module):
 
         return cross_sim, src_sim, trg_sim
 
-    def calculate_votes(self, src_feats, trg_feats, epsilon, exp2, src_size, trg_size, src_weights=None, trg_weights=None, weak_mode=False):
-        cross_sim, src_sim, trg_sim = self.calculate_sim(src_feats, trg_feats, weak_mode)
+    def calculate_votes(self, src_feats, trg_feats, epsilon, exp2, src_size, trg_size, src_weights=None, trg_weights=None, weak_mode=False, bsz=1):
+        cross_sim, src_sim, trg_sim = self.calculate_sim(src_feats, trg_feats, weak_mode, bsz) # only for positive src_sim, trg_sim 
         cross_votes = self.optimal_matching(cross_sim, epsilon, exp2, src_size, trg_size, src_weights, trg_weights)
         if weak_mode:
             src_votes = self.optimal_matching(src_sim, epsilon, exp2, src_size, src_size, src_weights, src_weights)

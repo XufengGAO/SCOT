@@ -21,6 +21,7 @@ python3 -m torch.distributed.launch --master_port=${master_port} --nproc_per_nod
                                     --weak_lambda '[0.0, 1.0, 0.0]' \
                                     --collect_grad False \
                                     --entropy_func 'info_entropy_sq'\
+                                    --use_negative True \
                                     --match_norm_type 'l1' \
                                     --alpha 0.1 \
                                     --lr 0.01 \

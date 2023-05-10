@@ -76,7 +76,7 @@ class WeakDiscMatchLoss(nn.Module):
 
         self.entropy_func = self.information_entropy if entropy_func == 'info_entropy' else self.information_entropy_sq
 
-    def forward(self, x_cross: torch.Tensor, x_src: torch.Tensor, x_trg: torch.Tensor, src_feats: torch.Tensor, trg_feats: torch.Tensor) -> torch.Tensor:
+    def forward(self, x_cross: torch.Tensor, x_src: torch.Tensor, x_trg: torch.Tensor, src_feats: torch.Tensor, trg_feats: torch.Tensor, bsz, num_negatives=0) -> torch.Tensor:
         
         # match_loss = torch.zeros(1).to(x_cross.device)
         if self.weak_lambda[0]:
@@ -85,12 +85,19 @@ class WeakDiscMatchLoss(nn.Module):
             discSelf_loss = torch.zeros(1).cuda()
 
         if self.weak_lambda[1]:
-            discCross_loss = self.entropy_func(x_cross, self.match_norm_type)
+            discCross_loss_pos = self.entropy_func(x_cross[:bsz], self.match_norm_type)
+            if num_negatives > 0:
+                discCross_loss_neg = self.entropy_func(x_cross[bsz:], self.match_norm_type)
+            else:
+                discCross_loss_neg = 1.0
+
+            discCross_loss = discCross_loss_pos / discCross_loss_neg
+
         else:
             discCross_loss = torch.zeros(1).cuda()
 
         if self.weak_lambda[2]:
-            match_loss = self.information_match(x_cross, src_feats, trg_feats)
+            match_loss = self.information_match(x_cross[:bsz], src_feats, trg_feats)
         else:
             match_loss = torch.zeros(1).cuda()
                     

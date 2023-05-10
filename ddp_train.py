@@ -65,28 +65,54 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
         iters = step + epoch * total_steps
         if args.use_wandb and dist.get_rank() == 0:
             wandb.log({"iters": iters})
-                    
-        data["src_img"] = data["src_img"].cuda(non_blocking=True)
-        data["trg_img"] = data["trg_img"].cuda(non_blocking=True)
+
+        bsz = data["src_img"].size(0)
+        if args.use_negative:
+            shifted_idx = np.roll(np.arange(bsz), -1)
+            trg_img_neg = data['trg_img'][shifted_idx].clone()
+            trg_cls_neg = data['pair_classid'][shifted_idx].clone()
+            neg_subidx = (data['pair_classid'] - trg_cls_neg) != 0
+
+            src_img = torch.cat([data['src_img'], data['src_img'][neg_subidx]], dim=0).cuda(non_blocking=True)
+            trg_img = torch.cat([data['trg_img'], trg_img_neg[neg_subidx]], dim=0).cuda(non_blocking=True)
+
+            del trg_img_neg
+
+            if "src_mask" in data.keys():
+                trg_mask_neg = data['trg_mask'][shifted_idx].clone()
+                src_mask = torch.cat([data['src_mask'], data['src_mask'][neg_subidx]], dim=0).cuda(non_blocking=True)
+                trg_mask = torch.cat([data['trg_mask'], trg_mask_neg[neg_subidx]], dim=0).cuda(non_blocking=True)
+
+                del trg_mask_neg
+            else:
+                src_mask, trg_mask = None, None
+            
+            num_negatives = neg_subidx.sum()
+        
+        else:
+            num_negatives = 0
+            src_img = data["src_img"].cuda(non_blocking=True)
+            trg_img = data["trg_img"].cuda(non_blocking=True)
+
+            if "src_mask" in data.keys():
+                src_mask = data["src_mask"].cuda(non_blocking=True)
+                trg_mask = data["trg_mask"].cuda(non_blocking=True)
+            else:
+                src_mask, trg_mask = None, None
+        
         data["src_kps"] = data["src_kps"].cuda(non_blocking=True)
         data["n_pts"] = data["n_pts"].cuda(non_blocking=True)
         data["trg_kps"] = data["trg_kps"].cuda(non_blocking=True)
-        data["pckthres"] = data["pckthres"].cuda(non_blocking=True)        
-        if "src_mask" in data.keys():
-            data["src_mask"] = data["src_mask"].cuda(non_blocking=True)
-            data["trg_mask"] = data["trg_mask"].cuda(non_blocking=True)
-        else:
-            data["src_mask"], data["trg_mask"] = None, None
-        bsz = data["src_img"].size(0)
-        
+        data["pckthres"] = data["pckthres"].cuda(non_blocking=True)       
+
         # 1. compute output
         start_time = time.time()
         src, trg = model(
-            data["src_img"],
-            data["trg_img"],
+            src_img,
+            trg_img,
             args.classmap,
-            data["src_mask"],
-            data["trg_mask"],
+            src_mask,
+            trg_mask,
             args.backbone,
             'train',
         )
@@ -98,13 +124,13 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
         assert args.loss_stage in ["sim", "sim_geo", "votes", "votes_geo",], "Unknown loss stage"
         weak_mode = True if args.criterion == "weak" else False
         if "sim" in args.loss_stage:
-            cross_sim, src_sim, trg_sim = model.module.calculate_sim(src["feats"], trg["feats"], weak_mode)
+            cross_sim, src_sim, trg_sim = model.module.calculate_sim(src["feats"], trg["feats"], weak_mode, bsz)
 
         if "votes" in args.loss_stage:
             src_size = (src["feats"].size()[0], src["feats"].size()[1])
             trg_size = (trg["feats"].size()[0], trg["feats"].size()[1])
             cross_sim, src_sim, trg_sim = model.module.calculate_votes(
-                src["feats"], trg["feats"], args.epsilon, args.exp2, src_size, trg_size, src["weights"], trg["weights"], weak_mode)
+                src["feats"], trg["feats"], args.epsilon, args.exp2, src_size, trg_size, src["weights"], trg["weights"], weak_mode, bsz)
 
         if "geo" in args.loss_stage:
             cross_sim = model.module.calculate_votesGeo(
@@ -138,8 +164,8 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             pass
         elif args.criterion == "weak":
             task_loss = criterion(
-                cross_sim, src_sim, trg_sim,
-                src["feats"], trg["feats"],
+                cross_sim, src_sim[:bsz], trg_sim[bsz],
+                src["feats"], trg["feats"], bsz, num_negatives
             )
 
             discSelf_meter.update(task_loss[0].item(), bsz)
@@ -192,7 +218,7 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             src_size = (src["feats"].size()[0], src["feats"].size()[1])
             trg_size = (trg["feats"].size()[0], trg["feats"].size()[1])
             votes, _, _ = model.module.calculate_votes(
-                src["feats"], trg["feats"], args.epsilon, args.exp2, src_size, trg_size, src["weights"], trg["weights"], False)
+                src["feats"], trg["feats"], args.epsilon, args.exp2, src_size, trg_size, src["weights"], trg["weights"], False, bsz)
             votes_geo, _, _ = model.module.calculate_votesGeo(
                 votes, None, None, src["imsize"], trg["imsize"], src["box"], trg["box"])
             prd_kps = geometry.predict_kps(
@@ -291,13 +317,13 @@ def validate(args, model, criterion, dataloader, epoch, aux_val_loader=None):
                 cross_sim, src_sim, trg_sim = 0, 0, 0
                 weak_mode = True if args.criterion == "weak" else False
                 if "sim" in args.loss_stage:
-                    cross_sim, src_sim, trg_sim = model.module.calculate_sim(src["feats"], trg["feats"], weak_mode)
+                    cross_sim, src_sim, trg_sim = model.module.calculate_sim(src["feats"], trg["feats"], weak_mode, bsz)
 
                 if "votes" in args.loss_stage:
                     src_size = (src["feats"].size()[0], src["feats"].size()[1])
                     trg_size = (trg["feats"].size()[0], trg["feats"].size()[1])
                     cross_sim, src_sim, trg_sim = model.module.calculate_votes(
-                        src["feats"], trg["feats"], args.epsilon, args.exp2, src_size, trg_size, src["weights"], trg["weights"], weak_mode)
+                        src["feats"], trg["feats"], args.epsilon, args.exp2, src_size, trg_size, src["weights"], trg["weights"], weak_mode, bsz)
 
                 if "geo" in args.loss_stage:
                     cross_sim = model.module.calculate_votesGeo(
@@ -346,7 +372,7 @@ def validate(args, model, criterion, dataloader, epoch, aux_val_loader=None):
                 src_size = (src["feats"].size()[0], src["feats"].size()[1])
                 trg_size = (trg["feats"].size()[0], trg["feats"].size()[1])
                 votes, _, _ = model.module.calculate_votes(
-                    src["feats"], trg["feats"], args.epsilon, args.exp2, src_size, trg_size, src["weights"], trg["weights"], False)
+                    src["feats"], trg["feats"], args.epsilon, args.exp2, src_size, trg_size, src["weights"], trg["weights"], False, bsz)
                 votes_geo, _, _ = model.module.calculate_votesGeo(
                     votes, None, None, src["imsize"], trg["imsize"], src["box"], trg["box"])
                 prd_kps = geometry.predict_kps(
@@ -809,6 +835,7 @@ if __name__ == "__main__":
     parser.add_argument('--temp', type=float, default=0.05, help='softmax-temp for match loss')
     parser.add_argument("--collect_grad", type= boolean_string, nargs="?", default=False)
     parser.add_argument('--entropy_func', type=str, default='info_entropy')
+    parser.add_argument("--use_negative", type= boolean_string, nargs="?", default=False)
 
 
     # Arguments for distributed data parallel
@@ -825,6 +852,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     init_distributed_mode(args)
+
+    if args.use_negative:
+        assert args.criterion == 'weak', "use_negative is only for weak loss"
 
 
     if args.use_wandb and args.run_id == '':
