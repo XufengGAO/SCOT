@@ -1,14 +1,12 @@
-r"""Two different strategies of weak/strong supervisions"""
-from abc import ABC, abstractmethod
-
+r"""Different strategies of weak/strong supervisions"""
 import numpy as np
 import torch
 import torch.nn as nn
 import numpy as np
-from model.objective import Objective
 import torch.nn.functional as F
 from .norm import unit_gaussian_normalize, l1normalize, linearnormalize
 import re
+import math 
 
 class StrongCrossEntropyLoss(nn.Module):
     r"""Strongly-supervised cross entropy loss"""
@@ -51,9 +49,23 @@ class StrongCrossEntropyLoss(nn.Module):
 
         return cross_ent
     
+
+
+def mutual_nn_filter(correlation_matrix):
+    r"""Mutual nearest neighbor filtering (Rocco et al. NeurIPS'18)"""
+    corr_src_max = torch.max(correlation_matrix, dim=2, keepdim=True)[0]
+    corr_trg_max = torch.max(correlation_matrix, dim=1, keepdim=True)[0]
+    corr_src_max[corr_src_max == 0] += 1e-30
+    corr_trg_max[corr_trg_max == 0] += 1e-30
+
+    corr_src = correlation_matrix / corr_src_max
+    corr_trg = correlation_matrix / corr_trg_max
+
+    return correlation_matrix * (corr_src * corr_trg)
+    
 class WeakDiscMatchLoss(nn.Module):
     r"""Weakly-supervised discriminative and maching loss"""
-    def __init__(self, temp=1.0,  match_norm_type='l1', weak_lambda=None) -> None:
+    def __init__(self, temp=1.0,  match_norm_type='l1', weak_lambda=None, entropy_func='info_entropy') -> None:
         super(WeakDiscMatchLoss, self).__init__()
         self.softmax = torch.nn.Softmax(dim=1)
         self.eps = 1e-30
@@ -62,16 +74,18 @@ class WeakDiscMatchLoss(nn.Module):
         weak_lambda = list(map(float, re.findall(r"[-+]?(?:\d*\.*\d+)", weak_lambda)))
         self.weak_lambda = [i>0.0 for i in weak_lambda]
 
+        self.entropy_func = self.information_entropy if entropy_func == 'info_entropy' else self.information_entropy_sq
+
     def forward(self, x_cross: torch.Tensor, x_src: torch.Tensor, x_trg: torch.Tensor, src_feats: torch.Tensor, trg_feats: torch.Tensor) -> torch.Tensor:
         
         # match_loss = torch.zeros(1).to(x_cross.device)
         if self.weak_lambda[0]:
-            discSelf_loss = 0.5*(self.information_entropy(x_src, self.match_norm_type) + self.information_entropy(x_trg, self.match_norm_type))
+            discSelf_loss = 0.5*(self.entropy_func(x_src, self.match_norm_type) + self.entropy_func(x_trg, self.match_norm_type))
         else:
             discSelf_loss = torch.zeros(1).cuda()
 
         if self.weak_lambda[1]:
-            discCross_loss = self.information_entropy(x_cross, self.match_norm_type)
+            discCross_loss = self.entropy_func(x_cross, self.match_norm_type)
         else:
             discCross_loss = torch.zeros(1).cuda()
 
@@ -102,6 +116,37 @@ class WeakDiscMatchLoss(nn.Module):
         del src_ent, trg_ent, src_pdf, trg_pdf, correlation_matrix
         
         return score_net
+    
+
+    def information_entropy_sq(self, correlation_matrix, norm_type='l1'):
+        correlation_matrix = mutual_nn_filter(correlation_matrix)
+
+        rescale_factor = 4
+        side = int(math.sqrt(correlation_matrix.size(1)))
+        new_side = side // rescale_factor
+        
+        bsz = correlation_matrix.size(0)
+
+        trg2src_dist = correlation_matrix.view(bsz, -1, side, side)
+        src2trg_dist = correlation_matrix.view(bsz, side, side, -1).permute(0, 3, 1, 2)
+        
+        # Squeeze distributions for reliable entropy computation
+        trg2src_dist = F.interpolate(trg2src_dist, [new_side, new_side], mode='bilinear', align_corners=True)
+        src2trg_dist = F.interpolate(src2trg_dist, [new_side, new_side], mode='bilinear', align_corners=True)
+
+        norm = {'l1':l1normalize, 'linear':linearnormalize}
+        src_pdf = norm[norm_type](trg2src_dist.view(bsz, -1, (new_side * new_side)))
+        trg_pdf = norm[norm_type](src2trg_dist.view(bsz, -1, (new_side * new_side)))
+        
+        src_pdf[src_pdf == 0.0] = self.eps
+        trg_pdf[trg_pdf == 0.0] = self.eps
+
+        src_ent = (-(src_pdf * torch.log2(src_pdf)).sum(dim=2)).view(bsz, -1)
+        trg_ent = (-(trg_pdf * torch.log2(trg_pdf)).sum(dim=2)).view(bsz, -1)
+        score_net = (src_ent + trg_ent).mean(dim=1) / 2
+
+        return score_net.mean()
+
     
     def information_match(self, x_cross: torch.Tensor, src_feats: torch.Tensor, trg_feats: torch.Tensor):
         src_feats = src_feats / (torch.norm(src_feats, p=2, dim=2, keepdim=True)+ self.eps) # normalized features

@@ -675,7 +675,7 @@ def main(args):
     optimizer = build_optimizer(args, model)
     lr_scheduler = build_scheduler(args, optimizer, len(train_loader), config=None)
     if args.criterion == "weak":
-        criterion = WeakDiscMatchLoss(args.temp, args.match_norm_type, args.weak_lambda)
+        criterion = WeakDiscMatchLoss(args.temp, args.match_norm_type, args.weak_lambda, args.entropy_func)
     elif args.criterion == "strong_ce":
         criterion = StrongCrossEntropyLoss(args.alpha)
     elif args.criterion == "flow":
@@ -808,6 +808,7 @@ if __name__ == "__main__":
     parser.add_argument('--weak_lambda', type=str, default='[1.0, 1.0, 1.0]')
     parser.add_argument('--temp', type=float, default=0.05, help='softmax-temp for match loss')
     parser.add_argument("--collect_grad", type= boolean_string, nargs="?", default=False)
+    parser.add_argument('--entropy_func', type=str, default='info_entropy')
 
 
     # Arguments for distributed data parallel
@@ -816,6 +817,9 @@ if __name__ == "__main__":
     parser.add_argument("--local_rank", required=True, type=int, help='local rank for DistributedDataParallel')
     parser.add_argument('--dist_backend', default='nccl', type=str, help='distributed backend')
     parser.add_argument("--eval_mode", type= boolean_string, nargs="?", default=False, help='train or test model')
+
+
+    
     
 
     args = parser.parse_args()

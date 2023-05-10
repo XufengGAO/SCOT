@@ -77,6 +77,8 @@ class SCOT_CAM(nn.Module):
 
         self.select_all = args.select_all
 
+        self.upsample_size = [int(args.img_side[0]/4), int(args.img_side[1]/4)]
+
 
     def forward(self, src_img, trg_img, classmap, src_mask, trg_mask, backbone, model_stage="train"):
         r"""Forward pass"""
@@ -236,6 +238,7 @@ class SCOT_CAM(nn.Module):
         # feature extrac torch.Size([4, 15168, 64, 64]) 
         # torch.Size([4, 2048, 8, 8]) torch.Size([4, 1000])
         
+        #TODO: use fixed rfsz = 11, jsz = 4, feat_size for dhpf
         hpgeometry = geometry.receptive_fields(self.update_rfsz, self.update_jsz, hyperfeats.size())
         # print('hpgeometry', hpgeometry.size())
         # torch.Size([4096, 4])
