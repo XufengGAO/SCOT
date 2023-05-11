@@ -122,7 +122,9 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
         # 2. calculate sim
         start_time = time.time()
         assert args.loss_stage in ["sim", "sim_geo", "votes", "votes_geo",], "Unknown loss stage"
-        weak_mode = True if args.criterion == "weak" else False
+        
+        weak_mode = True if args.criterion == "weak" and (args.weak_lambda[0]>0.0) else False
+        
         if "sim" in args.loss_stage:
             cross_sim, src_sim, trg_sim = model.module.calculate_sim(src["feats"], trg["feats"], weak_mode, bsz)
 
@@ -133,7 +135,7 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
                 src["feats"], trg["feats"], args.epsilon, args.exp2, src_size, trg_size, src["weights"], trg["weights"], weak_mode, bsz)
 
         if "geo" in args.loss_stage:
-            cross_sim = model.module.calculate_votesGeo(
+            cross_sim, src_sim, trg_sim = model.module.calculate_votesGeo(
                 cross_sim, src_sim, trg_sim, src["imsize"], trg["imsize"], src["box"], trg["box"]
             )
         Pointtime['Point-3'] += ((time.time()-start_time)/60)
@@ -164,7 +166,7 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             pass
         elif args.criterion == "weak":
             task_loss = criterion(
-                cross_sim, src_sim[:bsz], trg_sim[bsz],
+                cross_sim, src_sim, trg_sim,
                 src["feats"], trg["feats"], bsz, num_negatives
             )
 
@@ -237,7 +239,7 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
             del batch_pck
 
         # 5. print running pck, loss
-        if (step % 50 == 0) and dist.get_rank() == 0:
+        if (step % 100 == 0) and dist.get_rank() == 0:
             progress.display(step+1)
 
         del src, trg, data
@@ -315,7 +317,7 @@ def validate(args, model, criterion, dataloader, epoch, aux_val_loader=None):
                 # 2. calculate sim
                 assert args.loss_stage in ["sim", "sim_geo", "votes", "votes_geo",], "Unknown loss stage"
                 cross_sim, src_sim, trg_sim = 0, 0, 0
-                weak_mode = True if args.criterion == "weak" else False
+                weak_mode = True if args.criterion == "weak" and (args.weak_lambda[0]>0.0) else False
                 if "sim" in args.loss_stage:
                     cross_sim, src_sim, trg_sim = model.module.calculate_sim(src["feats"], trg["feats"], weak_mode, bsz)
 
@@ -326,7 +328,7 @@ def validate(args, model, criterion, dataloader, epoch, aux_val_loader=None):
                         src["feats"], trg["feats"], args.epsilon, args.exp2, src_size, trg_size, src["weights"], trg["weights"], weak_mode, bsz)
 
                 if "geo" in args.loss_stage:
-                    cross_sim = model.module.calculate_votesGeo(
+                    cross_sim, src_sim, trg_sim = model.module.calculate_votesGeo(
                         cross_sim, src_sim, trg_sim, src["imsize"], trg["imsize"], src["box"], trg["box"]
                     )
 
@@ -356,7 +358,7 @@ def validate(args, model, criterion, dataloader, epoch, aux_val_loader=None):
                 elif args.criterion == "weak":
                     task_loss = criterion(
                         cross_sim, src_sim, trg_sim,
-                        src["feats"], trg["feats"],
+                        src["feats"], trg["feats"], bsz, num_negatives=0
                     )
 
                     loss = (args.weak_lambda * task_loss).sum()
@@ -617,7 +619,12 @@ def build_wandb(args, rank):
             wandb_name += "_%s" % (args.scheduler)
         if args.optimizer == "sgd":
             wandb_name = wandb_name + "_m%.2f" % (args.momentum)
-        wandb_name += "_bsz%d" % (args.batch_size)
+        
+        if args.use_negative:
+            wandb_name += "_bsz%d-neg" % (args.batch_size*2)
+            args.batch_size = args.batch_size*2
+        else:
+            wandb_name += "_bsz%d" % (args.batch_size)
 
         if args.criterion == 'weak':
             wandb_name += ("_%s_tp%.2f"%(args.weak_lambda, args.temp))

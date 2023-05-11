@@ -20,12 +20,12 @@ python3 -m torch.distributed.launch --master_port=${master_port} --nproc_per_nod
                                     --temp 0.05 \
                                     --weak_lambda '[0.0, 1.0, 0.0]' \
                                     --collect_grad False \
-                                    --entropy_func 'info_entropy_sq'\
-                                    --use_negative True \
+                                    --entropy_func 'info_entropy'\
+                                    --use_negative False \
                                     --match_norm_type 'l1' \
                                     --alpha 0.1 \
-                                    --lr 0.01 \
-                                    --momentum 0.9 \
+                                    --lr 0.003 \
+                                    --momentum 0.95 \
                                     --epochs 100 \
                                     --batch_size 4 \
                                     --optimizer 'sgd' \
@@ -34,4 +34,4 @@ python3 -m torch.distributed.launch --master_port=${master_port} --nproc_per_nod
                                     --wandb_proj 'ddp_scot' \
                                     --loss_stage "sim" \
                                     --cam "mask/resnet101/200_300" \
-                                    --img_side '(240,240)' 
+                                    --img_side '(200,300)' 

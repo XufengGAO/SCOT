@@ -92,7 +92,6 @@ class WeakDiscMatchLoss(nn.Module):
                 discCross_loss_neg = 1.0
 
             discCross_loss = discCross_loss_pos / discCross_loss_neg
-
         else:
             discCross_loss = torch.zeros(1).cuda()
 

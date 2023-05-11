@@ -207,7 +207,7 @@ class SCOT_CAM(nn.Module):
 
             geometric_scores = torch.cat(geometric_scores, dim=0)
 
-        votes *= geometric_scores
+        votes = votes * geometric_scores
         del nbins_x, nbins_y, hs_cellsize, bin_ids, hspace, hbin_ids, new_hspace, geometric_scores
         
         return votes
