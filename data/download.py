@@ -10,7 +10,7 @@ from . import pfwillow
 from . import spair
 
 
-def load_dataset(benchmark, datapath, thres, split='test', cam='', img_side=(256, 256), use_resize=False, use_batch=False):
+def load_dataset(benchmark, datapath, thres, split='test', cam='', output_image_size=(256, 256), use_resize=False, use_batch=False):
     r"""Instantiate desired correspondence dataset"""
     correspondence_benchmark = {
         'pfpascal': pfpascal.PFPascalDataset,
@@ -22,7 +22,7 @@ def load_dataset(benchmark, datapath, thres, split='test', cam='', img_side=(256
     if dataset is None:
         raise Exception('Invalid benchmark dataset %s.' % benchmark)
 
-    return dataset(benchmark, datapath, thres, split, cam, img_side, use_resize, use_batch)
+    return dataset(benchmark, datapath, thres, split, cam, output_image_size, use_resize, use_batch)
 
 
 def download_from_google(token_id, filename):

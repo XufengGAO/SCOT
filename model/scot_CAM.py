@@ -9,7 +9,7 @@ from . import geometry
 from . import rhm_map
 from . import resnet
 import torch.nn as nn
-from .gating import DynamicFeatureSelection, GradNorm
+from .gating import DynamicFeatureSelection
 from .base.geometry import Geometry
 import numpy as np
 
@@ -80,7 +80,7 @@ class SCOT_CAM(nn.Module):
         self.upsample_size = [int(args.img_side[0]/4), int(args.img_side[1]/4)]
 
 
-    def forward(self, src_img, trg_img, classmap, src_mask, trg_mask, backbone, model_stage="train"):
+    def forward2(self, src_img, trg_img, classmap, src_mask, trg_mask, backbone, model_stage="train"):
         r"""Forward pass"""
 
         # 1. Update the hyperpixel_ids by checking the weights
@@ -101,6 +101,26 @@ class SCOT_CAM(nn.Module):
 
         return src, trg
 
+    def forward(self, src_img, trg_img, classmap, src_mask, trg_mask, backbone, model_stage="train"):
+        r"""Forward pass"""
+
+        # 1. Update the hyperpixel_ids by checking the weights
+        prob = torch.rand(1).item()
+        if (prob > self.select_all) and model_stage == "train":
+            n_layers = {"resnet50": 17, "resnet101": 34, "fcn101": 34}
+            self.hyperpixels = list(range(n_layers[backbone]))
+        else:
+            self.hyperpixels = self.learner.return_hyperpixel_ids()
+
+        # 2. Update receptive field size
+        self.update_rfsz = self.rfsz[self.hyperpixels[0]].to(src_img.device)
+        self.update_jsz = self.jsz[self.hyperpixels[0]].to(src_img.device)
+
+        # 3. extract hyperpixel
+        src, trg = self.extract_hyperpixel2(src_img, trg_img, classmap, src_mask, trg_mask)
+
+        return src, trg
+    
 
     def calculate_sim(self, src_feats, trg_feats, weak_mode=False, bsz=1):
         src_feats = src_feats / (torch.norm(src_feats, p=2, dim=2).unsqueeze(-1)+ 1e-10) # normalized features
@@ -219,6 +239,130 @@ class SCOT_CAM(nn.Module):
         # print(mask.size(), torch.max(mask), torch.min(mask))
 
         return mask
+
+
+    def extract_feat(self, src_img, trg_img):
+
+        # Concatenate source & target images (B,6,H,W)
+        # Perform group convolution (group=2) for faster inference time
+        # Layer 0
+        with torch.no_grad(): # freeze backbone
+
+            pair_img = torch.cat([src_img, trg_img], dim=1)
+            src_feats, trg_feats = [], []
+            feat = self.backbone.conv1.forward(pair_img)
+            del pair_img
+            feat = self.backbone.bn1.forward(feat)
+            feat = self.backbone.relu.forward(feat)
+            feat = self.backbone.maxpool.forward(feat)
+
+            if 0 in self.hyperpixels:
+                src_feats.append(feat.narrow(1, 0, feat.size(1) // 2).clone())
+                trg_feats.append(feat.narrow(1, feat.size(1) // 2, feat.size(1) // 2).clone())
+            
+
+
+            # Layer 1-4
+            for hid, (bid, lid) in enumerate(zip(self.bottleneck_ids, self.layer_ids)):
+                res = feat
+                feat = self.backbone.__getattr__('layer%d' % lid)[bid].conv1.forward(feat)
+                feat = self.backbone.__getattr__('layer%d' % lid)[bid].bn1.forward(feat)
+                feat = self.backbone.__getattr__('layer%d' % lid)[bid].relu.forward(feat)
+                feat = self.backbone.__getattr__('layer%d' % lid)[bid].conv2.forward(feat)
+                feat = self.backbone.__getattr__('layer%d' % lid)[bid].bn2.forward(feat)
+                feat = self.backbone.__getattr__('layer%d' % lid)[bid].relu.forward(feat)
+                feat = self.backbone.__getattr__('layer%d' % lid)[bid].conv3.forward(feat)
+                feat = self.backbone.__getattr__('layer%d' % lid)[bid].bn3.forward(feat)
+                
+                if bid == 0:
+                    res = self.backbone.__getattr__('layer%d' % lid)[bid].downsample.forward(res)
+                
+                feat += res
+
+                if hid + 1 in self.hyperpixels:
+                    src_feats.append(feat.narrow(1, 0, feat.size(1) // 2).clone())
+                    trg_feats.append(feat.narrow(1, feat.size(1) // 2, feat.size(1) // 2).clone())
+            
+
+                feat = self.backbone.__getattr__('layer%d' % lid)[bid].relu.forward(feat)
+
+            del feat
+            
+            # Global Average Pooling feature map
+            # src_feat = feat.narrow(1, 0, feat.size(1) // 2).clone()  # cut the feats to src, trg
+            # trg_feat = feat.narrow(1, feat.size(1) // 2, feat.size(1) // 2).clone()
+
+            
+            # torch.Size([4, 3, 240, 240]) torch.Size([4, 2048, 8, 8]) torch.Size([4, 1000])
+            # print(img.size(), feat_map.size(), fc.size())
+
+            # Up-sample & concatenate features to construct a hyperimage
+            for idx, (src_feat, trg_feat) in enumerate(zip(src_feats, trg_feats)):
+                if idx == 0:
+                    continue
+                # upsampling deep features
+                src_feats[idx] = F.interpolate(src_feat, tuple(src_feats[0].size()[2:]), None, 'bilinear', True)
+                trg_feats[idx] = F.interpolate(trg_feat, tuple(trg_feats[0].size()[2:]), None, 'bilinear', True)
+        
+        # scaled the features
+        for i,  (hyper_id, src_feat, trg_feat) in enumerate(zip(self.hyperpixels, src_feats, trg_feats)):
+            src_feats[i] = self.learner(hyper_id, src_feat)
+            trg_feats[i] = self.learner(hyper_id, trg_feat)
+
+        src_feats = torch.cat(src_feats, dim=1)  # 4-dim, BCHW
+        trg_feats = torch.cat(trg_feats, dim=1)
+
+        # print(feats.size(), feats.requires_grad)
+        # torch.Size([2, 15168, 64, 64]) True
+
+        # return 3-dim tensor, cause B=1
+        return src_feats, trg_feats
+
+
+    def extract_hyperpixel2(self, src_img, trg_img, classmap, src_mask, trg_mask):
+    
+        src_feats, trg_feats = self.extract_feat(src_img, trg_img)
+
+        src_geo = geometry.receptive_fields(self.update_rfsz, self.update_jsz, src_feats.size())
+        trg_geo = geometry.receptive_fields(self.update_rfsz, self.update_jsz, trg_feats.size()) 
+
+        # flattern each channel: torch.Size([4, 4096, 15168]) = (batch, whole hyperpixels, channels)
+        src_feats = src_feats.view(src_feats.size()[0], src_feats.size()[1], -1).transpose(1, 2)
+        trg_feats = trg_feats.view(trg_feats.size()[0], trg_feats.size()[1], -1).transpose(1, 2)
+
+        # print(hyperfeats.size(), len(hyperfeats))
+
+        def return_weight(mask, hpgeometry):
+            scale = 1.0
+            hpos = geometry.center(hpgeometry)
+
+            hselect = mask[:, hpos[:,1].long(),hpos[:,0].long()].to(hpos.device)
+
+            weights = 0.5*torch.ones(hselect.size()).to(hpos.device)
+            weights[hselect>0.4*scale] = 0.8  # weighted CAM with gamma and beta
+            weights[hselect>0.5*scale] = 0.9
+            weights[hselect>0.6*scale] = 1.0
+
+            del hpos, hselect
+
+            return weights
+
+        # weight points, CAM weighter pixels importance
+
+        if classmap in [1]:               
+            src_weights = return_weight(src_mask, src_geo)
+            trg_weights = return_weight(trg_mask, trg_geo)
+            
+        else:
+            # len return 1st dim
+            src_weights = torch.ones(len(src_feats), src_feats.size()[1]).to(src_feats.device)
+            trg_weights = torch.ones(len(trg_feats), trg_feats.size()[1]).to(trg_feats.device)
+            # print(weights.size())
+        
+        src_results = {'box':src_geo, 'feats':src_feats, 'imsize':src_img.size()[2:][::-1], 'weights':src_weights}
+        trg_results = {'box':trg_geo, 'feats':trg_feats, 'imsize':trg_img.size()[2:][::-1], 'weights':trg_weights}
+
+        return src_results, trg_results
 
     def extract_hyperpixel(self, img, classmap, mask, backbone="resnet101"):
         r"""Given image, extract desired list of hyperpixels \

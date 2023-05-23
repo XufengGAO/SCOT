@@ -96,7 +96,7 @@ class WeakDiscMatchLoss(nn.Module):
             discCross_loss = torch.zeros(1).cuda()
 
         if self.weak_lambda[2]:
-            match_loss = self.information_match(x_cross[:bsz], src_feats, trg_feats)
+            match_loss = self.information_match(x_cross[:bsz], src_feats[:bsz], trg_feats[:bsz])
         else:
             match_loss = torch.zeros(1).cuda()
                     

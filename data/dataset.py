@@ -10,8 +10,8 @@ import torch.nn.functional as F
 from model.base.geometry import Geometry
 
 class CorrespondenceDataset(Dataset):
-    r"""Parent class of PFPascal, PFWillow, Caltech, and SPair""" # imside = (H, W)
-    def __init__(self, benchmark, datapath, thres, split, imside=(256,256), use_resize=False, use_batch=False):
+    r"""Parent class of PFPascal, PFWillow, Caltech, and SPair""" # output_image_size = (H, W)
+    def __init__(self, benchmark, datapath, thres, split, output_image_size=(256,256), use_resize=False, use_batch=False):
         r"""CorrespondenceDataset constructor"""
         super(CorrespondenceDataset, self).__init__()
 
@@ -83,8 +83,8 @@ class CorrespondenceDataset(Dataset):
         else:
             self.max_pts = 40
         
-        assert isinstance(imside, tuple) or isinstance(imside, int), print("The type of imsize should be tuple or int")
-        self.imside = imside # rescale image
+        assert isinstance(output_image_size, tuple) or isinstance(output_image_size, int), print("The type of imsize should be tuple or int")
+        self.output_image_size = output_image_size # rescale image
         self.benchmark = benchmark
 
     def __len__(self):
@@ -95,36 +95,33 @@ class CorrespondenceDataset(Dataset):
         r"""Construct and return a batch"""
 
         # Image names
-        sample = dict()
-        sample['src_imname'] = self.src_imnames[idx]
-        sample['trg_imname'] = self.trg_imnames[idx]
+        batch = dict()
+        batch['src_imname'] = self.src_imnames[idx]
+        batch['trg_imname'] = self.trg_imnames[idx]
 
         # Class of instances in the images
-        sample['pair_classid'] = self.cls_ids[idx]
-        sample['pair_class'] = self.cls[sample['pair_classid']]
+        batch['category_id'] = self.cls_ids[idx]
+        batch['pair_class'] = self.cls[batch['category_id']]
 
-        # Image as PIL
-        src_pil = self.get_image(sample['src_imname'])
-        trg_pil = self.get_image(sample['trg_imname'])
+        # Image as PIL (original height, original width)
+        src_pil = self.get_image(batch['src_imname'])
+        trg_pil = self.get_image(batch['trg_imname'])
+
+        batch['src_imsize_ori'] = np.array((src_pil.size[1],src_pil.size[0]))  # h,w
+        batch['trg_imsize_ori'] = np.array((trg_pil.size[1],trg_pil.size[0]))
 
         # Image (original size) as tensor
-        sample['src_img'] = self.transform(src_pil) # totensor, CxHxW
-        sample['trg_img'] = self.transform(trg_pil)
+        batch['src_img'] = self.transform(src_pil) # totensor, CxHxW
+        batch['trg_img'] = self.transform(trg_pil)
 
         # Key-points (original) as tensor
-        sample['src_kps'], sample['n_pts'] = self.get_points(self.src_kps, idx)
-        sample['trg_kps'], _ = self.get_points(self.trg_kps, idx)
+        batch['src_kps'], batch['n_pts'] = self.get_points(self.src_kps, idx)
+        batch['trg_kps'], _ = self.get_points(self.trg_kps, idx)
 
         # The number of pairs in training split
-        sample['datalen'] = len(self.train_data)
+        batch['datalen'] = len(self.train_data)
 
-        # for key, value in sample.items():
-        #     if key in ['src_img', 'trg_img']:
-        #         print(key, value.size())
-        #     else:
-        #         print(key, value)
-
-        return sample
+        return batch
 
     def get_image(self, img_names):
         r"""Return image tensor"""
@@ -156,12 +153,12 @@ class CorrespondenceDataset(Dataset):
         r"""Resize given image with imsize: (1, 3, H, W)"""
         imsize = torch.tensor(img.size()).float()
 
-        if isinstance(self.imside, tuple):
-            inter_ratio = (self.imside[0]/imsize[2], self.imside[1]/imsize[3])
-            new_size = (self.imside[0], self.imside[1])
+        if isinstance(self.output_image_size, tuple):
+            inter_ratio = (self.output_image_size[0]/imsize[2], self.output_image_size[1]/imsize[3])
+            new_size = (self.output_image_size[0], self.output_image_size[1])
         else:
             side_max = torch.max(imsize)
-            inter_ratio = (self.imside/side_max, self.imside/side_max) # size reduced to new HxW
+            inter_ratio = (self.output_image_size/side_max, self.output_image_size/side_max) # size reduced to new HxW
             new_size = (int(imsize[2] * inter_ratio[0]), int(imsize[3] * inter_ratio[1]))
             
         img = F.interpolate(img,

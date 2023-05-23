@@ -12,9 +12,9 @@ from PIL import Image
 
 class PFPascalDataset(CorrespondenceDataset):
     r"""Inherits CorrespondenceDataset"""
-    def __init__(self, benchmark, datapath, thres, split, cam, imside=(200,300), use_resize=False, use_batch=False):
+    def __init__(self, benchmark, datapath, thres, split, cam, output_image_size=(200,300), use_resize=False, use_batch=False):
         r"""PF-PASCAL dataset constructor"""
-        super(PFPascalDataset, self).__init__(benchmark, datapath, thres, split, imside, use_resize, use_batch)
+        super(PFPascalDataset, self).__init__(benchmark, datapath, thres, split, output_image_size, use_resize, use_batch)
 
         self.train_data = pd.read_csv(self.spt_path) # dataframe
         self.src_imnames = np.array(self.train_data.iloc[:, 0])
@@ -32,7 +32,6 @@ class PFPascalDataset(CorrespondenceDataset):
         self.trg_kps = [] 
         self.src_bbox = [] # list of tensor bbx (x11, x12, x21, x22)
         self.trg_bbox = []
-
         # loop over each pair
         for src_imname, trg_imname, cls in zip(self.src_imnames, self.trg_imnames, self.cls_ids):
             # read annotation files
@@ -50,8 +49,7 @@ class PFPascalDataset(CorrespondenceDataset):
             trg_kps = []
             for src_kk, trg_kk in zip(src_kp, trg_kp):
                 # if kp is nan, just ignore
-                if len(torch.isnan(src_kk).nonzero()) != 0 or \
-                        len(torch.isnan(trg_kk).nonzero()) != 0:
+                if torch.isnan(src_kk).sum() > 0 or torch.isnan(trg_kk).sum() > 0:
                     continue
                 else:
                     src_kps.append(src_kk)
@@ -63,6 +61,8 @@ class PFPascalDataset(CorrespondenceDataset):
 
         self.src_imnames = list(map(lambda x: os.path.basename(x), self.src_imnames))
         self.trg_imnames = list(map(lambda x: os.path.basename(x), self.trg_imnames))
+
+
 
     def __getitem__(self, idx):
         r"""Construct and return a batch for PF-PASCAL dataset"""
@@ -106,13 +106,6 @@ class PFPascalDataset(CorrespondenceDataset):
 
         sample['pckthres'] = self.get_pckthres(sample) # rescaled pckthres
 
-
-        # for key, value in sample.items():
-        #     if key in ['src_img', 'trg_img']:
-        #         print(key, value.size())
-        #     else:
-        #         print(key, value)
-        # x
 
         if self.use_batch:
             sample['src_kps'] = self.pad_kps(sample['src_kps'], sample['n_pts'])
