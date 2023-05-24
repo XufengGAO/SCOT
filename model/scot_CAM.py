@@ -77,10 +77,10 @@ class SCOT_CAM(nn.Module):
 
         self.select_all = args.select_all
 
-        self.upsample_size = [int(args.img_side[0]/4), int(args.img_side[1]/4)]
+        self.upsample_size = [int(args.output_image_size[0]/4), int(args.output_image_size[1]/4)]
 
 
-    def forward2(self, src_img, trg_img, classmap, src_mask, trg_mask, backbone, model_stage="train"):
+    def forward(self, src_img, trg_img, classmap, src_mask, trg_mask, backbone, model_stage="train"):
         r"""Forward pass"""
 
         # 1. Update the hyperpixel_ids by checking the weights
@@ -101,7 +101,7 @@ class SCOT_CAM(nn.Module):
 
         return src, trg
 
-    def forward(self, src_img, trg_img, classmap, src_mask, trg_mask, backbone, model_stage="train"):
+    def forward2(self, src_img, trg_img, classmap, src_mask, trg_mask, backbone, model_stage="train"):
         r"""Forward pass"""
 
         # 1. Update the hyperpixel_ids by checking the weights
@@ -637,8 +637,8 @@ class SCOT_CAM(nn.Module):
     def state_dict(self):
         return self.learner.state_dict()
     
-    def load_backbone(self, state_dict):
-        self.backbone.load_state_dict(state_dict, strict=False)
+    def load_backbone(self, state_dict, strict=False):
+        self.backbone.load_state_dict(state_dict, strict=strict)
 
     def load_state_dict(self, state_dict):
         self.learner.load_state_dict(state_dict)

@@ -555,14 +555,14 @@ def build_optimizer(args, model):
     return optimizer
 
 def load_checkpoint(args, model, optimizer, lr_scheduler):
+    max_pck = 0.0
     if args.resume:
         Logger.info(f">>>>>>>>>> Resuming from {args.resume} ..........")
         checkpoint = torch.load(args.resume, map_location="cpu")
 
         msg = model.load_state_dict(checkpoint["model"], strict=False)
         Logger.info(msg)
-
-        max_pck = 0.0
+        
         if (
             not args.eval_mode
             and "optimizer" in checkpoint
@@ -732,6 +732,7 @@ def main(args):
         max_pck = load_checkpoint(args, model_without_ddp, optimizer, lr_scheduler)
     else:
         max_pck = 0.0
+
     # ============ 6. Evaluator, Wandb ... ============
     Evaluator.initialize(args.alpha)
     build_wandb(args, rank)
@@ -848,10 +849,7 @@ if __name__ == "__main__":
     parser.add_argument("--local_rank", required=True, type=int, help='local rank for DistributedDataParallel')
     parser.add_argument('--dist_backend', default='nccl', type=str, help='distributed backend')
     parser.add_argument("--eval_mode", type= boolean_string, nargs="?", default=False, help='train or test model')
-
-
-    
-    
+        
 
     args = parser.parse_args()
     

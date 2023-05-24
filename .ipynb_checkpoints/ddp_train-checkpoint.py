@@ -1,6 +1,3 @@
-r"""Beam search for hyperpixel layers"""
-
-
 import datetime
 import argparse
 import os
@@ -70,8 +67,8 @@ def train(args, model, criterion, dataloader, optimizer, epoch):
         if args.use_negative:
             shifted_idx = np.roll(np.arange(bsz), -1)
             trg_img_neg = data['trg_img'][shifted_idx].clone()
-            trg_cls_neg = data['pair_classid'][shifted_idx].clone()
-            neg_subidx = (data['pair_classid'] - trg_cls_neg) != 0
+            trg_cls_neg = data['category_id'][shifted_idx].clone()
+            neg_subidx = (data['category_id'] - trg_cls_neg) != 0
 
             src_img = torch.cat([data['src_img'], data['src_img'][neg_subidx]], dim=0).cuda(non_blocking=True)
             trg_img = torch.cat([data['trg_img'], trg_img_neg[neg_subidx]], dim=0).cuda(non_blocking=True)
@@ -468,7 +465,7 @@ def build_dataloader(args, rank, world_size):
         args.thres,
         "trn",
         args.cam,
-        img_side=args.img_side,
+        output_image_size=args.output_image_size,
         use_resize=True,
         use_batch=args.use_batch,
     )
@@ -486,7 +483,7 @@ def build_dataloader(args, rank, world_size):
         args.thres,
         "val",
         args.cam,
-        img_side=args.img_side,
+        output_image_size=args.output_image_size,
         use_resize=True,
         use_batch=args.use_batch,
     )
@@ -558,34 +555,35 @@ def build_optimizer(args, model):
     return optimizer
 
 def load_checkpoint(args, model, optimizer, lr_scheduler):
-    Logger.info(f">>>>>>>>>> Resuming from {args.resume} ..........")
-    checkpoint = torch.load(args.resume, map_location="cpu")
-
-    msg = model.load_state_dict(checkpoint["model"], strict=False)
-    Logger.info(msg)
-
     max_pck = 0.0
-    if (
-        not args.eval_mode
-        and "optimizer" in checkpoint
-        and "lr_scheduler" in checkpoint
-        and "epoch" in checkpoint
-    ):
-        optimizer.load_state_dict(checkpoint["optimizer"])
-        lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
-        args.start_epoch = checkpoint["epoch"] + 1
+    if args.resume:
+        Logger.info(f">>>>>>>>>> Resuming from {args.resume} ..........")
+        checkpoint = torch.load(args.resume, map_location="cpu")
 
-        Logger.info(
-            f"=> loaded successfully '{args.resume}' (epoch {checkpoint['epoch']})"
-        )
+        msg = model.load_state_dict(checkpoint["model"], strict=False)
+        Logger.info(msg)
+        
+        if (
+            not args.eval_mode
+            and "optimizer" in checkpoint
+            and "lr_scheduler" in checkpoint
+            and "epoch" in checkpoint
+        ):
+            optimizer.load_state_dict(checkpoint["optimizer"])
+            lr_scheduler.load_state_dict(checkpoint["lr_scheduler"])
+            args.start_epoch = checkpoint["epoch"] + 1
 
-        if "max_pck" in checkpoint:
-            max_pck = checkpoint["max_pck"]
-        else:
-            max_pck = 0.0
+            Logger.info(
+                f"=> loaded successfully '{args.resume}' (epoch {checkpoint['epoch']})"
+            )
 
-    del checkpoint
-    torch.cuda.empty_cache()
+            if "max_pck" in checkpoint:
+                max_pck = checkpoint["max_pck"]
+            else:
+                max_pck = 0.0
+
+        del checkpoint
+        torch.cuda.empty_cache()
 
     # load backbone
     if args.selfsup in ["dino", "denseCL"]:
@@ -685,8 +683,8 @@ def main(args):
     world_size = dist.get_world_size()
 
     fix_randseed(seed=(0))
-    cudnn.benchmark = False
-    cudnn.deterministic = True
+    cudnn.benchmark = True
+    # cudnn.deterministic = True
     
     # ============ 2. Make Dataloader ... ============
     train_loader, val_loader, aux_val_loader = build_dataloader(args, rank, world_size)
@@ -729,11 +727,12 @@ def main(args):
     Logger.info(f">>>>>>>>>> number of training params: {n_parameters}")
 
     # resume the model
-    if args.resume:
+    if args.resume or args.selfsup in ["dino", "denseCL"]:
         model_without_ddp = model.module
         max_pck = load_checkpoint(args, model_without_ddp, optimizer, lr_scheduler)
     else:
         max_pck = 0.0
+
     # ============ 6. Evaluator, Wandb ... ============
     Evaluator.initialize(args.alpha)
     build_wandb(args, rank)
@@ -782,7 +781,6 @@ def main(args):
 
     Logger.info("==================== Finished training ====================")
 
-
 if __name__ == "__main__":
     # Arguments parsing
     # fmt: off
@@ -822,7 +820,7 @@ if __name__ == "__main__":
     parser.add_argument('--weight_thres', type=float, default=0.00, help='weight_thres (default: 0.00)')
     parser.add_argument('--select_all', type=float, default=1.01, help='selec all probability (default: 1.0)')
     
-    parser.add_argument('--img_side', type=str, default='(300)')
+    parser.add_argument('--output_image_size', type=str, default='(300)')
 
     # Algorithm parameters
     parser.add_argument('--sim', type=str, default='OTGeo', help='Similarity type: OT, OTGeo, cos, cosGeo')
@@ -851,10 +849,7 @@ if __name__ == "__main__":
     parser.add_argument("--local_rank", required=True, type=int, help='local rank for DistributedDataParallel')
     parser.add_argument('--dist_backend', default='nccl', type=str, help='distributed backend')
     parser.add_argument("--eval_mode", type= boolean_string, nargs="?", default=False, help='train or test model')
-
-
-    
-    
+        
 
     args = parser.parse_args()
     
@@ -866,8 +861,8 @@ if __name__ == "__main__":
 
     if args.use_wandb and args.run_id == '':
         args.run_id = wandb.util.generate_id()
-    args.img_side = parse_string(args.img_side)
-    if isinstance(args.img_side, int):
+    args.output_image_size = parse_string(args.output_image_size)
+    if isinstance(args.output_image_size, int):
         # use target rhf center if only scale the max_side
         args.trg_cen = True
         args.use_batch = False
